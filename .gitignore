@@ -1,12 +1,12 @@
-# Rust
-target/
-**/target/
-
 # Node
 node_modules/
 **/node_modules/
 frontend/.next/
 frontend/out/
+
+# Laravel (project-level ignores live in laravel/.gitignore)
+laravel/vendor/
+laravel/.env
 
 # Env / secrets
 .env

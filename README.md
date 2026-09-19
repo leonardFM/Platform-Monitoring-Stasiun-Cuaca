@@ -1,8 +1,8 @@
 # IoT Weather Station Monitoring Platform
 
-Full-stack take-home project: an Actix-Web ingestion API + RabbitMQ telemetry
-queue + Rust worker (validation, calibration, quality, rain delta, aggregates)
-+ Next.js dashboard, all orchestrated with Docker Compose.
+Full-stack take-home project: a Laravel ingestion API + RabbitMQ telemetry
+queue + Laravel worker (validation, calibration, quality, rain delta,
+aggregates) + Next.js dashboard, all orchestrated with Docker Compose.
 
 ## Architecture
 
@@ -10,16 +10,15 @@ queue + Rust worker (validation, calibration, quality, rain delta, aggregates)
 Weather Device
      │  POST /api/v1/ingest/telemetry(+batch)   X-API-Key
      ▼
-Actix-Web backend ──> RabbitMQ (telemetry.ingest) ──> Rust worker ──> PostgreSQL
+Laravel backend ──> RabbitMQ (telemetry.ingest) ──> Laravel worker ──> PostgreSQL
      │                                                          │  aggregates
      │  read API /api/v1/dashboard                              │
      ▼                                                          ▼
 Next.js (dashboard) ─────────────────────────────────────>  PostgreSQL (read)
 ```
 
-Data flow: devices post JSON -> backend **validates + authenticates** and
-publishes to RabbitMQ -> worker consumes, runs the processing pipeline and
-persists -> dashboard reads aggregates/readings.
+Backend and worker run the same Laravel codebase (`./laravel`) as two Docker
+Compose services, so the pipeline is plain PHP jobs on the default queue.
 
 ## Quick start
 
@@ -34,6 +33,8 @@ Services (with the ports exposed to the host):
 |----------|------------------------------------------------|
 | frontend | http://localhost:3000                          |
 | backend  | http://localhost:8080                          |
+| Swagger UI | http://localhost:8080/api/documentation    |
+| OpenAPI spec | http://localhost:8080/docs |
 | RabbitMQ management | http://localhost:15672 (weather / weather_password) |
 | Postgres | localhost:5432                                 |
 
@@ -50,9 +51,8 @@ credentials are hardcoded anywhere.
 | `POSTGRES_USER/PASSWORD/DB` | Postgres credentials |
 | `RABBITMQ_DEFAULT_USER/PASS/VHOST` | RabbitMQ credentials/vhost |
 | `DEMO_DEVICE_API_KEY` | seeded demo device API key |
-| `DATABASE_URL` | backend/worker -> postgres |
-| `RABBITMQ_URL` / `RABBITMQ_QUEUE` | backend/worker -> rabbitmq |
-| `RUST_LOG` | backend/worker log level |
+| `DB_HOST/PORT/USER/PASSWORD/NAME` | Laravel -> Postgres |
+| `RABBITMQ_HOST/PORT/USER/PASSWORD/VHOST` | Laravel -> RabbitMQ |
 | `BACKEND_INTERNAL_URL` | Next.js -> backend (Docker network) |
 | `NEXT_PUBLIC_API_URL` | the browser-facing API base |
 
@@ -87,7 +87,8 @@ curl -X POST http://localhost:8080/api/v1/ingest/telemetry \
   -d '{"message_id":"5b1b1a3e-...","taken_at":"2026-01-01T12:00:00Z","sensors":{ ... }}'
 ```
 
-Batch endpoint (max 100 readings, atomic validation):
+Batch endpoint (max 100 readings per request; readings are validated and
+pushed individually):
 
 ```bash
 curl -X POST http://localhost:8080/api/v1/ingest/telemetry/batch \
@@ -99,17 +100,21 @@ curl -X POST http://localhost:8080/api/v1/ingest/telemetry/batch \
 Or run the simulator:
 
 ```bash
-docker compose exec backend /bin/true   # not needed
-# from the host:
 ./demo/simulate.sh -n 50
 ./demo/simulate.sh -n 50 http://localhost:8080
 ```
 
-Other endpoints: `GET /healthz`, `GET /api/v1/dashboard`.
+Other endpoints: `GET /healthz`, `GET /api/v1/dashboard`, plus the interactive
+Swagger UI at `/api/documentation` (raw spec: `/docs`).
+
+Swagger "Try it out" works out of the box: the ingest operations document a
+pre-filled `X-API-Key` header parameter with the demo key and ship valid example
+bodies, so hitting **Execute** returns `202` without extra setup (clear the key
+field to see `401`).
 
 ## Worker processing pipeline
 
-1. Deserialize + decode `IngestMessage`
+1. Payload decoded from RabbitMQ (`telemetry.ingest`)
 2. Sensor validation — device must exist and be active
 3. Range validation — strict physical bounds per channel (`-60..60 °C`, …)
 4. Idempotency — `INSERT ... ON CONFLICT (device_id, message_id) DO NOTHING`;
@@ -131,9 +136,7 @@ and acks only after a successful commit.
 ## Project layout
 
 ```
-backend/    Actix-Web API (auth, validation, RabbitMQ publisher)
-worker/     Tokio consumer (processing pipeline, aggregates)
-shared/     serde DTOs + calibration + sensor bounds (shared by both crates)
+laravel/    Laravel app (API, queue job/worker pipeline, Swagger docs, Docker image)
 db/init/    Postgres schema + demo device seed (entrypoint-initdb.d)
 frontend/   Next.js App Router dashboard (server-side proxy to backend)
 demo/       curl-based device simulator
@@ -145,4 +148,12 @@ demo/       curl-based device simulator
 docker compose ps                  # all healthy
 docker compose logs -f worker      # show ingested readings
 curl -s http://localhost:8080/api/v1/dashboard | python3 -m json.tool
+```
+
+## Development
+
+```bash
+# lint all PHP files
+docker run --rm -v "$PWD/laravel:/app" -w /app php:8.4-cli-alpine \
+  sh -lc 'for f in $(find app routes config bootstrap -name "*.php"); do php -l "$f"; done'
 ```

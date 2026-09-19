@@ -1,0 +1,24 @@
+.env
+/vendor
+node_modules
+/public/build
+/storage/*.key
+/storage/logs/*.log
+/storage/framework/cache/*
+/storage/framework/sessions/*
+/storage/framework/views/*
+/storage/api-docs/*
+.COMPOSER_CACHE
+.phpunit.result.cache
+.idea
+.vscode
+.git
+
+# keep the lockfile in the build context but ignore generated artifacts
+.gitignore
+AGENTS.md
+CLAUDE.md
+phpunit.xml
+tests
+npm-debug.log
+yarn-error.log

@@ -1,0 +1,182 @@
+Project weather_station {
+  database_type: 'PostgreSQL'
+  Note: 'Sistem Stasiun Cuaca - skema final (docs/database.md)'
+}
+
+Table users {
+  id           uuid          [pk, default: 'gen_random_uuid()']
+  name         varchar(255)
+  email        varchar(255)  [unique]
+  password_hash text
+  created_at   timestamptz   [default: 'now()']
+  updated_at   timestamptz   [default: 'now()']
+  deleted_at   timestamptz   [null]
+}
+
+Table locations {
+  id           uuid          [pk, default: 'gen_random_uuid()']
+  name         varchar(255)
+  latitude     decimal(9,6)  [note: 'CHECK -90..90']
+  longitude    decimal(9,6)  [note: 'CHECK -180..180']
+  altitude     decimal(10,2) [null]
+  created_at   timestamptz   [default: 'now()']
+  updated_at   timestamptz   [default: 'now()']
+}
+
+Table sensor_types {
+  id           uuid          [pk, default: 'gen_random_uuid()']
+  code         varchar(50)   [unique, note: 'temp_air, humidity, pressure, wind_speed, wind_dir, rain_counter, solar_rad']
+  name         varchar(255)
+  unit         varchar(50)
+  valid_min    decimal(20,6) [null]
+  valid_max    decimal(20,6) [null]
+  precision    decimal(20,6) [null]
+  created_at   timestamptz   [default: 'now()']
+  updated_at   timestamptz   [default: 'now()']
+}
+
+Table devices {
+  id             uuid          [pk, default: 'gen_random_uuid()']
+  device_code    varchar(100)  [unique]
+  name           varchar(255)
+  location_id    uuid          [ref: > locations.id, note: 'FK']
+  status         varchar(30)   [note: 'provisioned|active|maintenance|decommissioned']
+  firmware_version varchar(50) [null]
+  last_seen_at   timestamptz   [null]
+  last_device_time timestamptz [null]
+  created_at     timestamptz   [default: 'now()']
+  updated_at     timestamptz   [default: 'now()']
+  deleted_at     timestamptz   [null]
+
+  indexes {
+    (location_id)
+    (status)
+    (last_seen_at)
+    (status, last_seen_at)
+  }
+}
+
+Table device_credentials {
+  id           uuid          [pk, default: 'gen_random_uuid()']
+  device_id    uuid          [ref: > devices.id, note: 'FK']
+  api_key      varchar(255)  [unique]
+  secret_hash  text
+  created_at   timestamptz   [default: 'now()']
+  last_used_at timestamptz   [null]
+  revoked_at   timestamptz   [null]
+
+  indexes {
+    (device_id)
+    (device_id, revoked_at)
+  }
+}
+
+Table device_status_history {
+  id           uuid          [pk, default: 'gen_random_uuid()']
+  device_id    uuid          [ref: > devices.id, note: 'FK']
+  from_status  varchar(30)   [null, note: 'NULL utk baris pertama']
+  to_status    varchar(30)
+  reason       text          [null]
+  changed_by   uuid          [ref: > users.id, null, note: 'FK']
+  created_at   timestamptz   [default: 'now()']
+
+  indexes {
+    (device_id)
+    (device_id, created_at)
+    (changed_by)
+  }
+}
+
+Table sensor_installations {
+  id           uuid          [pk, default: 'gen_random_uuid()']
+  sensor_id    uuid          [ref: > sensors.id, note: 'FK']
+  device_id    uuid          [ref: > devices.id, note: 'FK']
+  installed_at timestamptz
+  removed_at   timestamptz   [null, note: 'NULL = masih aktif']
+  created_at   timestamptz   [default: 'now()']
+
+  indexes {
+    (sensor_id, installed_at)
+    (device_id, installed_at)
+    (sensor_id) [unique, name: 'uq_one_active', note: 'partial WHERE removed_at IS NULL']
+  }
+}
+
+Table sensor_calibrations {
+  id             uuid          [pk, default: 'gen_random_uuid()']
+  sensor_id      uuid          [ref: > sensors.id, note: 'FK']
+  offset         decimal       [default: '0']
+  scale          decimal       [default: '1']
+  effective_from timestamptz
+  effective_to   timestamptz   [null]
+  created_at     timestamptz   [default: 'now()']
+
+  indexes {
+    (sensor_id, effective_from)
+  }
+}
+
+Table sensors {
+  id              uuid          [pk, default: 'gen_random_uuid()']
+  serial_number   varchar(100)  [unique]
+  sensor_type_id  uuid          [ref: > sensor_types.id, note: 'FK']
+  manufacturer    varchar(255)  [null]
+  model           varchar(255)  [null]
+  status          varchar(30)
+  created_at      timestamptz   [default: 'now()']
+  updated_at      timestamptz   [default: 'now()']
+  deleted_at      timestamptz   [null]
+
+  indexes {
+    (sensor_type_id)
+  }
+}
+
+Table sensor_readings {
+  id              bigint        [pk, note: 'IDENTITY, PK (id, device_time)']
+  device_id       uuid          [ref: > devices.id, note: 'FK']
+  sensor_id       uuid          [ref: > sensors.id, note: 'FK']
+  device_time     timestamptz   [note: 'kolom PARTITION RANGE (bulanan)']
+  server_time     timestamptz
+  seq             bigint
+  raw_value       decimal
+  corrected_value decimal       [null]
+  quality_flag    varchar(50)   [note: 'GOOD|OUT_OF_RANGE|SENSOR_ERROR|CLOCK_DRIFT|LATE|INVALID|DUPLICATE']
+  reading_key     varchar(255)  [unique, note: 'deterministik, diisi trigger']
+  created_at      timestamptz   [default: 'now()']
+
+  indexes {
+    (sensor_id, device_time) [name: 'idx_readings_sensor_time', note: 'DESC']
+    (device_id, device_time) [name: 'idx_readings_device_time', note: 'DESC']
+    (reading_key, device_time) [unique, note: 'idx utk ON CONFLICT DO NOTHING']
+  }
+}
+
+Table reading_aggregates {
+  id            bigint        [pk, increment]
+  sensor_id     uuid          [ref: > sensors.id, note: 'FK']
+  bucket_start  timestamptz
+  interval      varchar(10)   [note: '1m|1h|1d']
+  min_value     decimal       [null]
+  max_value     decimal       [null]
+  avg_value     decimal       [null]
+  sum_value     decimal       [null]
+  sample_count  int
+  quality_count int
+  created_at    timestamptz   [default: 'now()']
+
+  indexes {
+    (sensor_id, interval, bucket_start) [unique]
+    (sensor_id, interval, bucket_start) [name: 'idx_aggregates_desc', note: 'DESC']
+  }
+}
+
+Table device_health {
+  device_id        uuid          [pk, ref: > devices.id, note: 'FK 1:1']
+  battery_voltage  decimal       [null]
+  rssi             decimal       [null]
+  firmware_version varchar(50)   [null]
+  last_heartbeat_at timestamptz  [null]
+  uptime_seconds   bigint        [null]
+  updated_at       timestamptz   [default: 'now()']
+}

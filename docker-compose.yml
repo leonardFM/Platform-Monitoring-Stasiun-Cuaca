@@ -43,18 +43,47 @@ services:
     networks:
       - weather
 
+  adminer:
+    image: adminer:4.8.1-standalone
+    restart: unless-stopped
+    ports:
+      - "8081:8080"
+    environment:
+      ADMINER_DEFAULT_SERVER: postgres
+    networks:
+      - weather
+    depends_on:
+      postgres:
+        condition: service_healthy
+
   backend:
     build:
-      context: .
-      dockerfile: backend/Dockerfile
+      context: ./laravel
+    command: ["backend"]
     restart: unless-stopped
     environment:
-      DATABASE_URL: ${DATABASE_URL:?DATABASE_URL must be set (see .env.example)}
-      RABBITMQ_URL: ${RABBITMQ_URL:?RABBITMQ_URL must be set (see .env.example)}
+      APP_KEY: ${APP_KEY:?APP_KEY must be set (see .env.example)}
+      APP_ENV: production
+      APP_DEBUG: "false"
+      APP_URL: ${APP_URL:-http://localhost:8080}
+      LOG_CHANNEL: stderr
+      SESSION_DRIVER: file
+      CACHE_STORE: file
+      QUEUE_FAILED_DRIVER: null
+      DB_CONNECTION: pgsql
+      DB_HOST: postgres
+      DB_PORT: "5432"
+      DB_DATABASE: ${POSTGRES_DB:-weather_db}
+      DB_USERNAME: ${POSTGRES_USER:-weather}
+      DB_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set (see .env.example)}
+      QUEUE_CONNECTION: rabbitmq
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_PORT: "5672"
+      RABBITMQ_USER: ${RABBITMQ_DEFAULT_USER:-weather}
+      RABBITMQ_PASSWORD: ${RABBITMQ_DEFAULT_PASS:?RABBITMQ_DEFAULT_PASS must be set (see .env.example)}
+      RABBITMQ_VHOST: ${RABBITMQ_DEFAULT_VHOST:-/}
       RABBITMQ_QUEUE: ${RABBITMQ_QUEUE:-telemetry.ingest}
-      RUST_LOG: ${RUST_LOG:-info}
-      BIND_HOST: "0.0.0.0"
-      BIND_PORT: "8080"
+      MAX_BATCH_SIZE: ${MAX_BATCH_SIZE:-100}
     ports:
       - "8080:8080"
     depends_on:
@@ -63,7 +92,7 @@ services:
       rabbitmq:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/healthz"]
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8080/healthz"]
       interval: 10s
       timeout: 5s
       retries: 12
@@ -73,14 +102,32 @@ services:
 
   worker:
     build:
-      context: .
-      dockerfile: worker/Dockerfile
+      context: ./laravel
+    command: ["worker"]
     restart: unless-stopped
     environment:
-      DATABASE_URL: ${DATABASE_URL:?DATABASE_URL must be set (see .env.example)}
-      RABBITMQ_URL: ${RABBITMQ_URL:?RABBITMQ_URL must be set (see .env.example)}
+      APP_KEY: ${APP_KEY:?APP_KEY must be set (see .env.example)}
+      APP_ENV: production
+      APP_DEBUG: "false"
+      APP_URL: ${APP_URL:-http://localhost:8080}
+      LOG_CHANNEL: stderr
+      SESSION_DRIVER: file
+      CACHE_STORE: file
+      QUEUE_FAILED_DRIVER: null
+      DB_CONNECTION: pgsql
+      DB_HOST: postgres
+      DB_PORT: "5432"
+      DB_DATABASE: ${POSTGRES_DB:-weather_db}
+      DB_USERNAME: ${POSTGRES_USER:-weather}
+      DB_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set (see .env.example)}
+      QUEUE_CONNECTION: rabbitmq
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_PORT: "5672"
+      RABBITMQ_USER: ${RABBITMQ_DEFAULT_USER:-weather}
+      RABBITMQ_PASSWORD: ${RABBITMQ_DEFAULT_PASS:?RABBITMQ_DEFAULT_PASS must be set (see .env.example)}
+      RABBITMQ_VHOST: ${RABBITMQ_DEFAULT_VHOST:-/}
       RABBITMQ_QUEUE: ${RABBITMQ_QUEUE:-telemetry.ingest}
-      RUST_LOG: ${RUST_LOG:-info}
+      MAX_BATCH_SIZE: ${MAX_BATCH_SIZE:-100}
     depends_on:
       postgres:
         condition: service_healthy
