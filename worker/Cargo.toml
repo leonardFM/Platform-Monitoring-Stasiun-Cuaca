@@ -1,0 +1,22 @@
+[package]
+name = "weather-worker"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "weather-worker"
+path = "src/main.rs"
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+uuid.workspace = true
+chrono.workspace = true
+tokio.workspace = true
+sqlx.workspace = true
+lapin.workspace = true
+futures-util = "0.3"
+tracing.workspace = true
+tracing-subscriber.workspace = true
+anyhow.workspace = true
+weather-shared = { path = "../shared" }

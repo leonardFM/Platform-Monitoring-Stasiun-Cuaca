@@ -1,0 +1,19 @@
+# Rust
+target/
+**/target/
+
+# Node
+node_modules/
+**/node_modules/
+frontend/.next/
+frontend/out/
+
+# Env / secrets
+.env
+.env.local
+*.pem
+*.key
+
+# Logs / misc
+*.log
+.DS_Store

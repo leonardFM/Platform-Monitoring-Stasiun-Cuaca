@@ -1,0 +1,24 @@
+[package]
+name = "weather-backend"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "weather-backend"
+path = "src/main.rs"
+
+[dependencies]
+actix-web = "4"
+actix-cors = "0.7"
+serde.workspace = true
+serde_json.workspace = true
+uuid.workspace = true
+chrono.workspace = true
+tokio.workspace = true
+sqlx.workspace = true
+lapin.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+anyhow.workspace = true
+thiserror.workspace = true
+weather-shared = { path = "../shared" }
