@@ -44,6 +44,7 @@ Route::middleware('auth.api_key')->group(function () {
         // Device > installed sensors and device-scoped readings
         Route::get('sensors', [SensorInstallationController::class, 'deviceIndex']);
         Route::get('readings', [ReadingController::class, 'device']);
+        Route::get('readings/latest', [ReadingController::class, 'latest']);
     });
 
     // Sensor Types

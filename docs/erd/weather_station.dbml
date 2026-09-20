@@ -1,6 +1,6 @@
 Project weather_station {
   database_type: 'PostgreSQL'
-  Note: 'Sistem Stasiun Cuaca - skema final (docs/database.md)'
+  Note: 'Sistem Stasiun Cuaca - skema FINAL (docs/database.md). Termasuk TimescaleDB hypertable conversion (migrasi 000013, 000014).'
 }
 
 Table users {
@@ -33,6 +33,9 @@ Table sensor_types {
   precision    decimal(20,6) [null]
   created_at   timestamptz   [default: 'now()']
   updated_at   timestamptz   [default: 'now()']
+  indexes {
+    (code)
+  }
 }
 
 Table devices {
@@ -40,7 +43,7 @@ Table devices {
   device_code    varchar(100)  [unique]
   name           varchar(255)
   location_id    uuid          [ref: > locations.id, note: 'FK']
-  status         varchar(30)   [note: 'provisioned|active|maintenance|decommissioned']
+  status         varchar(30)   [note: 'CHECK provisioned|active|maintenance|decommissioned']
   firmware_version varchar(50) [null]
   last_seen_at   timestamptz   [null]
   last_device_time timestamptz [null]
@@ -87,6 +90,22 @@ Table device_status_history {
   }
 }
 
+Table sensors {
+  id              uuid          [pk, default: 'gen_random_uuid()']
+  serial_number   varchar(100)  [unique]
+  sensor_type_id  uuid          [ref: > sensor_types.id, note: 'FK']
+  manufacturer    varchar(255)  [null]
+  model           varchar(255)  [null]
+  status          varchar(30)   [note: 'CHECK active|inactive|maintenance|retired']
+  created_at      timestamptz   [default: 'now()']
+  updated_at      timestamptz   [default: 'now()']
+  deleted_at      timestamptz   [null]
+
+  indexes {
+    (sensor_type_id)
+  }
+}
+
 Table sensor_installations {
   id           uuid          [pk, default: 'gen_random_uuid()']
   sensor_id    uuid          [ref: > sensors.id, note: 'FK']
@@ -116,58 +135,46 @@ Table sensor_calibrations {
   }
 }
 
-Table sensors {
-  id              uuid          [pk, default: 'gen_random_uuid()']
-  serial_number   varchar(100)  [unique]
-  sensor_type_id  uuid          [ref: > sensor_types.id, note: 'FK']
-  manufacturer    varchar(255)  [null]
-  model           varchar(255)  [null]
-  status          varchar(30)
-  created_at      timestamptz   [default: 'now()']
-  updated_at      timestamptz   [default: 'now()']
-  deleted_at      timestamptz   [null]
-
-  indexes {
-    (sensor_type_id)
-  }
-}
+// ============================================================
+// TIME-SERIES TABLES (TimescaleDB Hypertables)
+// ============================================================
 
 Table sensor_readings {
-  id              bigint        [pk, note: 'IDENTITY, PK (id, device_time)']
+  id              bigint        [pk, note: 'IDENTITY, PK komposit (id, device_time) untuk hypertable']
   device_id       uuid          [ref: > devices.id, note: 'FK']
   sensor_id       uuid          [ref: > sensors.id, note: 'FK']
-  device_time     timestamptz   [note: 'kolom PARTITION RANGE (bulanan)']
+  device_time     timestamptz   [note: 'Kolom partisi hypertable (chunk_interval 7 hari)']
   server_time     timestamptz
   seq             bigint
   raw_value       decimal
   corrected_value decimal       [null]
-  quality_flag    varchar(50)   [note: 'GOOD|OUT_OF_RANGE|SENSOR_ERROR|CLOCK_DRIFT|LATE|INVALID|DUPLICATE']
-  reading_key     varchar(255)  [unique, note: 'deterministik, diisi trigger']
+  quality_flag    varchar(50)   [note: 'CHECK: GOOD|OUT_OF_RANGE|SENSOR_ERROR|CLOCK_DRIFT|LATE|INVALID|DUPLICATE|RAIN_INITIAL|RAIN_RESET']
+  reading_key     varchar(255)  [note: 'Deterministik, diisi oleh trigger BEFORE INSERT/UPDATE']
   created_at      timestamptz   [default: 'now()']
 
   indexes {
-    (sensor_id, device_time) [name: 'idx_readings_sensor_time', note: 'DESC']
-    (device_id, device_time) [name: 'idx_readings_device_time', note: 'DESC']
-    (reading_key, device_time) [unique, note: 'idx utk ON CONFLICT DO NOTHING']
+    (sensor_id, device_time) [name: 'idx_readings_sensor_time', note: 'DESC - query agregasi per sensor']
+    (device_id, device_time) [name: 'idx_readings_device_time', note: 'DESC - history per device']
+    (reading_key, device_time) [unique, note: 'Unique komposit untuk ON CONFLICT DO NOTHING (idempotensi)']
   }
 }
 
 Table reading_aggregates {
-  id            bigint        [pk, increment]
+  id            bigint        [pk, note: 'PK komposit (id, bucket_start) untuk hypertable']
   sensor_id     uuid          [ref: > sensors.id, note: 'FK']
-  bucket_start  timestamptz
-  interval      varchar(10)   [note: '1m|1h|1d']
+  bucket_start  timestamptz   [note: 'Kolom partisi hypertable (chunk_interval 1 hari)']
+  interval      varchar(10)   [note: 'CHECK: 1m|1h|1d']
   min_value     decimal       [null]
   max_value     decimal       [null]
   avg_value     decimal       [null]
   sum_value     decimal       [null]
-  sample_count  int
-  quality_count int
+  sample_count  int           [note: 'CHECK >= 0']
+  quality_count int           [note: 'CHECK >= 0']
   created_at    timestamptz   [default: 'now()']
 
   indexes {
-    (sensor_id, interval, bucket_start) [unique]
-    (sensor_id, interval, bucket_start) [name: 'idx_aggregates_desc', note: 'DESC']
+    (sensor_id, interval, bucket_start) [unique, note: 'Unique untuk UPSERT idempoten']
+    (sensor_id, interval, bucket_start) [name: 'idx_aggregates_desc', note: 'DESC - query anti-mundur']
   }
 }
 
@@ -178,5 +185,38 @@ Table device_health {
   firmware_version varchar(50)   [null]
   last_heartbeat_at timestamptz  [null]
   uptime_seconds   bigint        [null]
+  last_seq         bigint        [null]
   updated_at       timestamptz   [default: 'now()']
 }
+
+// ============================================================
+// RELATIONS (Refs)
+// ============================================================
+// Device <-> Location: 1 device belongs to 1 location
+// Device -> DeviceStatusHistory: 1 device has many status history
+// Device -> DeviceCredential: 1 device has many credentials
+// Device -> DeviceHealth: 1 device has 1 health (1:1)
+// Device <-> Sensor: N:M via SensorInstallation (dengan periode installed_at/removed_at)
+// Sensor -> SensorType: 1 sensor belongs to 1 sensor_type
+// Sensor -> SensorCalibration: 1 sensor has many calibrations (periode effective_from/to)
+// SensorInstallation -> Device: 1 installation belongs to 1 device
+// SensorInstallation -> Sensor: 1 installation belongs to 1 sensor
+// SensorReading -> Device: 1 reading belongs to 1 device
+// SensorReading -> Sensor: 1 reading belongs to 1 sensor
+// ReadingAggregate -> Sensor: 1 aggregate belongs to 1 sensor
+// DeviceStatusHistory -> User: 1 status change optionally by 1 user
+
+// ============================================================
+// NOTES
+// ============================================================
+// - sensor_readings: TimescaleDB hypertable pada device_time, chunk 7 hari.
+//   reading_key = device_id | epoch_micros(device_time) | sensor_id | seq
+//   Auto-generated oleh trigger trg_sensor_readings_reading_key (BEFORE INSERT/UPDATE).
+//   Unique (reading_key, device_time) + ON CONFLICT DO NOTHING = idempoten.
+// - reading_aggregates: TimescaleDB hypertable pada bucket_start, chunk 1 hari.
+//   UPSERT via unique (sensor_id, interval, bucket_start).
+// - sensor_installations: Partial unique index (sensor_id WHERE removed_at IS NULL)
+//   memastikan 1 sensor hanya punya 1 instalasi aktif.
+// - Calibrasi berlaku per periode: corrected = raw * scale + offset
+// - Device lifecycle: provisioned -> active -> (maintenance <-> active) -> decommissioned
+//   (dijamin oleh CHECK constraint + device_status_history trigger)

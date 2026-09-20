@@ -1,0 +1,572 @@
+{
+  "info": {
+    "_postman_id": "ws-fase3-manual-2026",
+    "name": "Weather Station API v1 (F.1 Spec)",
+    "description": "Postman collection untuk testing ingest API sesuai spec F.1 (single, batch, heartbeat) + read endpoints. Auth via X-API-Key header. Base URL: http://localhost:8080",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    { "key": "base_url", "value": "http://localhost:8080" },
+    { "key": "api_key", "value": "dev_demo_weather_station_2024" },
+    { "key": "device_id", "value": "WS-GRT-001" },
+    { "key": "fw", "value": "1.4.2" },
+    { "key": "ts", "value": "1757308800" },
+    { "key": "seq", "value": "10432" }
+  ],
+  "item": [
+    {
+      "name": "0. Health & Discovery",
+      "item": [
+        {
+          "name": "GET /healthz (no auth)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/healthz",
+              "host": ["{{base_url}}"],
+              "path": ["healthz"]
+            },
+            "description": "Health check tanpa auth. Harus return 200 OK"
+          }
+        },
+        {
+          "name": "GET /api/v1/dashboard",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "X-API-Key", "value": "{{api_key}}", "type": "text" }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/dashboard",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "dashboard"]
+            },
+            "description": "Dashboard summary: devices, latest readings, hourly series"
+          }
+        },
+        {
+          "name": "GET /api/v1/sensor-types",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "X-API-Key", "value": "{{api_key}}", "type": "text" }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/sensor-types",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "sensor-types"]
+            },
+            "description": "Daftar 7 sensor types: temp_air, humidity, pressure, wind_speed, wind_dir, rain_counter, solar_rad"
+          }
+        },
+        {
+          "name": "GET /api/v1/devices",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "X-API-Key", "value": "{{api_key}}", "type": "text" }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/devices?per_page=20",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "devices"],
+              "query": [{ "key": "per_page", "value": "20" }]
+            },
+            "description": "List devices (DEMO-001, WS-GRT-001, DEMO-002, DEMO-003)"
+          }
+        }
+      ]
+    },
+    {
+      "name": "1. Ingest - Single Telemetry (F.1)",
+      "item": [
+        {
+          "name": "POST /api/v1/ingest/telemetry - Single (WS-GRT-001, 7 sensors)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "X-API-Key", "value": "{{api_key}}", "type": "text" },
+              { "key": "Content-Type", "value": "application/json", "type": "text" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"device_id\": \"{{device_id}}\",\n  \"fw\": \"{{fw}}\",\n  \"ts\": {{ts}},\n  \"seq\": {{seq}},\n  \"battery_v\": 3.92,\n  \"rssi\": -71,\n  \"readings\": [\n    { \"s\": \"temp_air\", \"v\": 27.4 },\n    { \"s\": \"humidity\", \"v\": 82.1 },\n    { \"s\": \"pressure\", \"v\": 1008.3 },\n    { \"s\": \"wind_speed\", \"v\": 3.2 },\n    { \"s\": \"wind_dir\", \"v\": 217 },\n    { \"s\": \"rain_counter\", \"v\": 1043 },\n    { \"s\": \"solar_rad\", \"v\": 512.7 }\n  ]\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/v1/ingest/telemetry",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "ingest", "telemetry"]
+            },
+            "description": "Single payload F.1 spec. Device WS-GRT-001 sudah terdaftar dengan API key demo. Response: 202 Accepted + {accepted: true, device_id, ts, seq}"
+          }
+        },
+        {
+          "name": "POST /api/v1/ingest/telemetry - Single (DEMO-001, 2 sensors)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "X-API-Key", "value": "{{api_key}}", "type": "text" },
+              { "key": "Content-Type", "value": "application/json", "type": "text" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"device_id\": \"DEMO-001\",\n  \"fw\": \"1.4.2\",\n  \"ts\": 1757308800,\n  \"seq\": 10432,\n  \"battery_v\": 3.85,\n  \"rssi\": -62,\n  \"readings\": [\n    { \"s\": \"temp_air\", \"v\": 25.4 },\n    { \"s\": \"humidity\", \"v\": 62.0 }\n  ]\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/v1/ingest/telemetry",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "ingest", "telemetry"]
+            },
+            "description": "Minimal payload (2 sensors) untuk device DEMO-001 asli"
+          }
+        },
+        {
+          "name": "POST /api/v1/ingest/telemetry - Sensor Error (-999)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "X-API-Key", "value": "{{api_key}}", "type": "text" },
+              { "key": "Content-Type", "value": "application/json", "type": "text" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"device_id\": \"{{device_id}}\",\n  \"fw\": \"{{fw}}\",\n  \"ts\": 1757308800,\n  \"seq\": 10500,\n  \"battery_v\": 3.92,\n  \"rssi\": -71,\n  \"readings\": [\n    { \"s\": \"temp_air\", \"v\": -999 }\n  ]\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/v1/ingest/telemetry",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "ingest", "telemetry"]
+            },
+            "description": "Test F.3#2: sensor error code -999 -> quality_flag SENSOR_ERROR, corrected_value NULL"
+          }
+        },
+        {
+          "name": "POST /api/v1/ingest/telemetry - Out of Range (humidity 150)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "X-API-Key", "value": "{{api_key}}", "type": "text" },
+              { "key": "Content-Type", "value": "application/json", "type": "text" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"device_id\": \"{{device_id}}\",\n  \"fw\": \"{{fw}}\",\n  \"ts\": 1757308800,\n  \"seq\": 10501,\n  \"battery_v\": 3.92,\n  \"rssi\": -71,\n  \"readings\": [\n    { \"s\": \"humidity\", \"v\": 150 }\n  ]\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/v1/ingest/telemetry",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "ingest", "telemetry"]
+            },
+            "description": "Test F.3#3: humidity 150 (di luar 0-100) -> quality_flag OUT_OF_RANGE"
+          }
+        },
+        {
+          "name": "POST /api/v1/ingest/telemetry - Future Timestamp (CLOCK_DRIFT)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "X-API-Key", "value": "{{api_key}}", "type": "text" },
+              { "key": "Content-Type", "value": "application/json", "type": "text" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"device_id\": \"{{device_id}}\",\n  \"fw\": \"{{fw}}\",\n  \"ts\": 1757400000,\n  \"seq\": 10502,\n  \"battery_v\": 3.92,\n  \"rssi\": -71,\n  \"readings\": [\n    { \"s\": \"temp_air\", \"v\": 28.0 }\n  ]\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/v1/ingest/telemetry",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "ingest", "telemetry"]
+            },
+            "description": "Test F.3#1: ts di masa depan (+2 jam) -> quality_flag CLOCK_DRIFT (terima, tidak tolak)"
+          }
+        },
+        {
+          "name": "POST /api/v1/ingest/telemetry - Missing Sensor (solar_rad not sent)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "X-API-Key", "value": "{{api_key}}", "type": "text" },
+              { "key": "Content-Type", "value": "application/json", "type": "text" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"device_id\": \"{{device_id}}\",\n  \"fw\": \"{{fw}}\",\n  \"ts\": 1757308800,\n  \"seq\": 10503,\n  \"battery_v\": 3.92,\n  \"rssi\": -71,\n  \"readings\": [\n    { \"s\": \"temp_air\", \"v\": 28.0 },\n    { \"s\": \"humidity\", \"v\": 65.0 }\n  ]\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/v1/ingest/telemetry",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "ingest", "telemetry"]
+            },
+            "description": "Test F.3#7: solar_rad tidak dikirim -> diabaikan (tidak buat row NULL)"
+          }
+        }
+      ]
+    },
+    {
+      "name": "2. Ingest - Batch Telemetry (F.1)",
+      "item": [
+        {
+          "name": "POST /api/v1/ingest/telemetry/batch - 2 items (rain counter delta)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "X-API-Key", "value": "{{api_key}}", "type": "text" },
+              { "key": "Content-Type", "value": "application/json", "type": "text" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"device_id\": \"{{device_id}}\",\n  \"fw\": \"{{fw}}\",\n  \"batch\": [\n    {\n      \"ts\": 1757308800,\n      \"seq\": 10432,\n      \"battery_v\": 3.92,\n      \"rssi\": -71,\n      \"readings\": [\n        { \"s\": \"temp_air\", \"v\": 27.4 },\n        { \"s\": \"rain_counter\", \"v\": 1043 }\n      ]\n    },\n    {\n      \"ts\": 1757308860,\n      \"seq\": 10433,\n      \"battery_v\": 3.91,\n      \"rssi\": -73,\n      \"readings\": [\n        { \"s\": \"temp_air\", \"v\": 27.6 },\n        { \"s\": \"rain_counter\", \"v\": 1045 }\n      ]\n    }\n  ]\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/v1/ingest/telemetry/batch",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "ingest", "telemetry", "batch"]
+            },
+            "description": "Batch 2 items. rain_counter 1043->1045 = delta 2 tips = 0.4mm. Response: 202 {accepted: 2, duplicates: 0, items: [...]}. Chunk max 100/job."
+          }
+        },
+        {
+          "name": "POST /api/v1/ingest/telemetry/batch - Rain Reset (1043 -> 5)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "X-API-Key", "value": "{{api_key}}", "type": "text" },
+              { "key": "Content-Type", "value": "application/json", "type": "text" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"device_id\": \"{{device_id}}\",\n  \"fw\": \"{{fw}}\",\n  \"batch\": [\n    {\n      \"ts\": 1757308800,\n      \"seq\": 10434,\n      \"battery_v\": 3.92,\n      \"rssi\": -71,\n      \"readings\": [\n        { \"s\": \"rain_counter\", \"v\": 1043 }\n      ]\n    },\n    {\n      \"ts\": 1757308860,\n      \"seq\": 10435,\n      \"battery_v\": 3.91,\n      \"rssi\": -73,\n      \"readings\": [\n        { \"s\": \"rain_counter\", \"v\": 5 }\n      ]\n    }\n  ]\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/v1/ingest/telemetry/batch",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "ingest", "telemetry", "batch"]
+            },
+            "description": "Test F.3#4: rain_counter turun (device restart) -> quality_flag RAIN_RESET, corrected=0mm (tidak minus). Advisory lock per device serialisasi."
+          }
+        },
+        {
+          "name": "POST /api/v1/ingest/telemetry/batch - Duplicate Test (kirim 2x)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "X-API-Key", "value": "{{api_key}}", "type": "text" },
+              { "key": "Content-Type", "value": "application/json", "type": "text" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"device_id\": \"{{device_id}}\",\n  \"fw\": \"{{fw}}\",\n  \"batch\": [\n    {\n      \"ts\": 1757308800,\n      \"seq\": 10436,\n      \"battery_v\": 3.92,\n      \"rssi\": -71,\n      \"readings\": [\n        { \"s\": \"temp_air\", \"v\": 27.4 }\n      ]\n    }\n  ]\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/v1/ingest/telemetry/batch",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "ingest", "telemetry", "batch"]
+            },
+            "description": "Test F.3#5: Kirim batch yang sama 2x -> response items[0].status='duplicate' di batch ke-2. DB: UNIQUE (reading_key, device_time) + ON CONFLICT DO NOTHING"
+          }
+        },
+        {
+          "name": "POST /api/v1/ingest/telemetry/batch - Large Batch (500 items)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "X-API-Key", "value": "{{api_key}}", "type": "text" },
+              { "key": "Content-Type", "value": "application/json", "type": "text" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"device_id\": \"{{device_id}}\",\n  \"fw\": \"{{fw}}\",\n  \"batch\": [\n    /* GENERATE 500 ITEMS MANUALLY OR USE PRE-REQUEST SCRIPT */\n    {\n      \"ts\": 1757308800,\n      \"seq\": 10600,\n      \"battery_v\": 3.92,\n      \"rssi\": -71,\n      \"readings\": [\n        { \"s\": \"temp_air\", \"v\": 27.0 },\n        { \"s\": \"humidity\", \"v\": 60.0 }\n      ]\n    }\n    /* REPEAT FOR 500 ITEMS WITH INCREMENTING ts/seq */\n  ]\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/v1/ingest/telemetry/batch",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "ingest", "telemetry", "batch"]
+            },
+            "description": "Test F.3#8: Batch 500 items -> chunk 5 jobs x 100 items. Max request 5000 items (config). Response accepted=500, 5 worker jobs. Generate 500 items in pre-request script or use external file."
+          }
+        }
+      ]
+    },
+    {
+      "name": "3. Ingest - Heartbeat (F.1)",
+      "item": [
+        {
+          "name": "POST /api/v1/ingest/heartbeat",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "X-API-Key", "value": "{{api_key}}", "type": "text" },
+              { "key": "Content-Type", "value": "application/json", "type": "text" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"device_id\": \"{{device_id}}\",\n  \"ts\": 1757308920,\n  \"fw\": \"{{fw}}\",\n  \"battery_v\": 3.90,\n  \"rssi\": -70,\n  \"uptime_s\": 864321\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/v1/ingest/heartbeat",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "ingest", "heartbeat"]
+            },
+            "description": "Heartbeat payload (tanpa readings). Update device_health + devices.last_seen_at. Response: 200 {accepted: true, device_id, ts}"
+          }
+        }
+      ]
+    },
+    {
+      "name": "4. Read - Time Series Data",
+      "item": [
+        {
+          "name": "GET /api/v1/readings - Temperature 1h (WS-GRT-001)",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "X-API-Key", "value": "{{api_key}}", "type": "text" }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/readings?device_id=dddddddd-0000-4000-8000-000000000001&sensor_type=temp_air&interval=1h&from=2026-09-20T00:00:00Z&to=2026-09-20T23:00:00Z",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "readings"],
+              "query": [
+                { "key": "device_id", "value": "dddddddd-0000-4000-8000-000000000001" },
+                { "key": "sensor_type", "value": "temp_air" },
+                { "key": "interval", "value": "1h" },
+                { "key": "from", "value": "2026-09-20T00:00:00Z" },
+                { "key": "to", "value": "2026-09-20T23:00:00Z" }
+              ]
+            },
+            "description": "Format columnar (columns + data array). Query by device UUID, sensor_type code, interval (1m/1h/1d). Aggregated dari reading_aggregates."
+          }
+        },
+        {
+          "name": "GET /api/v1/readings - Rain Counter (raw)",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "X-API-Key", "value": "{{api_key}}", "type": "text" }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/readings?device_id=dddddddd-0000-4000-8000-000000000001&sensor_type=rain_counter&interval=raw&from=2026-09-20T00:00:00Z&to=2026-09-20T23:00:00Z",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "readings"],
+              "query": [
+                { "key": "device_id", "value": "dddddddd-0000-4000-8000-000000000001" },
+                { "key": "sensor_type", "value": "rain_counter" },
+                { "key": "interval", "value": "raw" },
+                { "key": "from", "value": "2026-09-20T00:00:00Z" },
+                { "key": "to", "value": "2026-09-20T23:00:00Z" }
+              ]
+            },
+            "description": "Raw readings (interval=raw) dari sensor_readings. Bukan agregat."
+          }
+        },
+        {
+          "name": "GET /api/v1/readings - All Sensors 1h",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "X-API-Key", "value": "{{api_key}}", "type": "text" }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/readings?device_id=dddddddd-0000-4000-8000-000000000001&interval=1h&from=2026-09-20T00:00:00Z&to=2026-09-20T23:00:00Z",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "readings"],
+              "query": [
+                { "key": "device_id", "value": "dddddddd-0000-4000-8000-000000000001" },
+                { "key": "interval", "value": "1h" },
+                { "key": "from", "value": "2026-09-20T00:00:00Z" },
+                { "key": "to", "value": "2026-09-20T23:00:00Z" }
+              ]
+            },
+            "description": "Semua sensor types untuk device (tanpa filter sensor_type). Return array per sensor."
+          }
+        }
+      ]
+    },
+    {
+      "name": "5. Error Cases (Negative Testing)",
+      "item": [
+        {
+          "name": "POST /ingest/telemetry - Invalid API Key (401)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "X-API-Key", "value": "invalid_key", "type": "text" },
+              { "key": "Content-Type", "value": "application/json", "type": "text" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"device_id\": \"{{device_id}}\",\n  \"fw\": \"{{fw}}\",\n  \"ts\": 1757308800,\n  \"seq\": 10432,\n  \"battery_v\": 3.92,\n  \"rssi\": -71,\n  \"readings\": [\n    { \"s\": \"temp_air\", \"v\": 27.4 }\n  ]\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/v1/ingest/telemetry",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "ingest", "telemetry"]
+            },
+            "description": "Test F.3#6: Invalid API key -> 401 {error: {code: 'unauthorized', message: 'invalid or inactive API key'}}"
+          }
+        },
+        {
+          "name": "POST /ingest/telemetry - Device ID Mismatch (400)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "X-API-Key", "value": "{{api_key}}", "type": "text" },
+              { "key": "Content-Type", "value": "application/json", "type": "text" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"device_id\": \"UNREGISTERED-001\",\n  \"fw\": \"{{fw}}\",\n  \"ts\": 1757308800,\n  \"seq\": 10432,\n  \"battery_v\": 3.92,\n  \"rssi\": -71,\n  \"readings\": [\n    { \"s\": \"temp_air\", \"v\": 27.4 }\n  ]\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/v1/ingest/telemetry",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "ingest", "telemetry"]
+            },
+            "description": "Test F.3#6: device_id tidak cocok dengan authenticated device -> 400 {error: {code: 'bad_request', message: 'payload device_id ... does not match authenticated device'}}"
+          }
+        },
+{
+          "name": "POST /ingest/telemetry/batch - Payload Too Large (413)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "X-API-Key", "value": "{{api_key}}", "type": "text" },
+              { "key": "Content-Type", "value": "application/json", "type": "text" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"device_id\": \"{{device_id}}\",\n  \"fw\": \"{{fw}}\",\n  \"batch\": [\n    /* GENERATE 5001 ITEMS TO TRIGGER 413 */\n    {\n      \"ts\": 1757308800,\n      \"seq\": 10600,\n      \"battery_v\": 3.92,\n      \"rssi\": -71,\n      \"readings\": [{ \"s\": \"temp_air\", \"v\": 27.0 }]\n    }\n    /* REPEAT FOR 5001 ITEMS */\n  ]\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/v1/ingest/telemetry/batch",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "ingest", "telemetry", "batch"]
+            },
+            "description": "Test F.3#8: Batch 5001 items > max 5000 -> 413 {error: {code: 'payload_too_large', message: 'batch size 5001 exceeds limit 5000'}}. Use pre-request script to generate large array."
+          }
+        },
+        {
+          "name": "POST /ingest/telemetry - Invalid Sensor Code (400)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "X-API-Key", "value": "{{api_key}}", "type": "text" },
+              { "key": "Content-Type", "value": "application/json", "type": "text" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"device_id\": \"{{device_id}}\",\n  \"fw\": \"{{fw}}\",\n  \"ts\": 1757308800,\n  \"seq\": 10432,\n  \"battery_v\": 3.92,\n  \"rssi\": -71,\n  \"readings\": [\n    { \"s\": \"invalid_sensor\", \"v\": 27.4 }\n  ]\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/v1/ingest/telemetry",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "ingest", "telemetry"]
+            },
+            "description": "Structural validation: sensor code tidak valid -> 400 bad_request dengan detail field readings[0].s"
+          }
+        }
+      ]
+    },
+    {
+      "name": "6. Device & Sensor CRUD",
+      "item": [
+        {
+          "name": "POST /api/v1/devices - Create Device",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "X-API-Key", "value": "{{api_key}}", "type": "text" },
+              { "key": "Content-Type", "value": "application/json", "type": "text" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"device_code\": \"WS-NEW-001\",\n  \"name\": \"Garut Baru\",\n  \"location_id\": \"11111111-1111-4111-8111-111111111111\",\n  \"status\": \"provisioned\",\n  \"firmware_version\": \"1.4.2\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/v1/devices",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "devices"]
+            },
+            "description": "Create device baru. Return 201 dengan device object (id, device_code, name, location_id, status, firmware_version, created_at)"
+          }
+        },
+        {
+          "name": "GET /api/v1/devices/:id - Detail Device",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "X-API-Key", "value": "{{api_key}}", "type": "text" }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/devices/dddddddd-0000-4000-8000-000000000001",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "devices", "dddddddd-0000-4000-8000-000000000001"]
+            },
+            "description": "Detail device termasuk location object, status, firmware, last_seen_at, last_device_time"
+          }
+        },
+        {
+          "name": "POST /api/v1/sensors - Create Sensor",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "X-API-Key", "value": "{{api_key}}", "type": "text" },
+              { "key": "Content-Type", "value": "application/json", "type": "text" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"serial_number\": \"WS-TEMP-NEW-001\",\n  \"sensor_type_id\": \"a0000000-0000-4000-8000-000000000001\",\n  \"manufacturer\": \"Luweis WS\",\n  \"model\": \"D-Series\",\n  \"status\": \"active\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/v1/sensors",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "sensors"]
+            },
+            "description": "Create sensor fisik. sensor_type_id dari GET /sensor-types"
+          }
+        },
+        {
+          "name": "POST /api/v1/devices/:id/sensors - Install Sensor",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "X-API-Key", "value": "{{api_key}}", "type": "text" },
+              { "key": "Content-Type", "value": "application/json", "type": "text" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"sensor_id\": \"a0000000-0000-4000-8000-000000000001\",\n  \"installed_at\": \"2026-09-20T00:00:00Z\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/v1/devices/dddddddd-0000-4000-8000-000000000001/sensors",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "devices", "dddddddd-0000-4000-8000-000000000001", "sensors"]
+            },
+            "description": "Pasang sensor ke device. Partial unique index: 1 active install per sensor."
+          }
+        },
+        {
+          "name": "POST /api/v1/sensors/:id/calibrations - Create Calibration",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "X-API-Key", "value": "{{api_key}}", "type": "text" },
+              { "key": "Content-Type", "value": "application/json", "type": "text" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"offset\": -0.2,\n  \"scale\": 1.01,\n  \"effective_from\": \"2026-09-20T00:00:00Z\",\n  \"effective_to\": null\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/v1/sensors/a0000000-0000-4000-8000-000000000001/calibrations",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "sensors", "a0000000-0000-4000-8000-000000000001", "calibrations"]
+            },
+            "description": "Kalibrasi periodik. corrected = raw * scale + offset. effective_to null = berlaku sampai sekarang."
+          }
+        }
+      ]
+    }
+  ]
+}

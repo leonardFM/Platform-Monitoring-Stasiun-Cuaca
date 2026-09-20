@@ -23,8 +23,8 @@ export const api = {
   },
 
   devices: {
-    list: (params?: { status?: string; page?: number; per_page?: number }) =>
-      fetchJson<{ data: import("@/app/types").DeviceInfo[]; pagination: any }>(
+    list: (params?: { status?: string; page?: number; per_page?: number; search?: string }) =>
+      fetchJson<{ data: import("@/app/types").DeviceInfo[]; pagination: import("@/app/types").Pagination }>(
         `/api/v1/devices?${new URLSearchParams(params as any).toString()}`
       ),
     get: (id: string) =>
@@ -80,6 +80,96 @@ export const api = {
           `/api/v1/devices/${deviceId}/status/history`
         ),
     },
+
+    sensors: (deviceId: string) =>
+      fetchJson<import("@/app/types").DeviceSensorList>(
+        `/api/v1/devices/${deviceId}/sensors`
+      ),
+
+    attachSensor: (deviceId: string, sensorId: string, installedAt?: string) =>
+      fetchJson<import("@/app/types").DeviceSensor>(
+        `/api/v1/devices/${deviceId}/sensors`,
+        { method: "POST", body: JSON.stringify({ sensor_id: sensorId, installed_at: installedAt }) }
+      ),
+
+    detachSensor: (deviceId: string, sensorId: string) =>
+      fetchJson<void>(`/api/v1/devices/${deviceId}/sensors/${sensorId}`, {
+        method: "DELETE",
+      }),
+  },
+
+  sensorTypes: {
+    list: (params?: { page?: number; per_page?: number }) =>
+      fetchJson<import("@/app/types").SensorTypeList>(
+        `/api/v1/sensor-types?${new URLSearchParams(params as any).toString()}`
+      ),
+    create: (data: any) =>
+      fetchJson<import("@/app/types").SensorType>("/api/v1/sensor-types", {
+        method: "POST",
+        body: JSON.stringify(data),
+      }),
+    get: (id: string) =>
+      fetchJson<import("@/app/types").SensorType>(`/api/v1/sensor-types/${id}`),
+    update: (id: string, data: any) =>
+      fetchJson<import("@/app/types").SensorType>(`/api/v1/sensor-types/${id}`, {
+        method: "PUT",
+        body: JSON.stringify(data),
+      }),
+    delete: (id: string) =>
+      fetchJson<void>(`/api/v1/sensor-types/${id}`, { method: "DELETE" }),
+  },
+
+  sensors: {
+    list: (params?: { page?: number; per_page?: number; sensor_type_id?: string }) =>
+      fetchJson<import("@/app/types").SensorList>(
+        `/api/v1/sensors?${new URLSearchParams(params as any).toString()}`
+      ),
+    create: (data: any) =>
+      fetchJson<import("@/app/types").Sensor>("/api/v1/sensors", {
+        method: "POST",
+        body: JSON.stringify(data),
+      }),
+    get: (id: string) =>
+      fetchJson<import("@/app/types").Sensor>(`/api/v1/sensors/${id}`),
+    update: (id: string, data: any) =>
+      fetchJson<import("@/app/types").Sensor>(`/api/v1/sensors/${id}`, {
+        method: "PUT",
+        body: JSON.stringify(data),
+      }),
+    delete: (id: string) =>
+      fetchJson<void>(`/api/v1/sensors/${id}`, { method: "DELETE" }),
+
+    calibrations: {
+      list: (sensorId: string) =>
+        fetchJson<{ data: any[] }>(`/api/v1/sensors/${sensorId}/calibrations`),
+      create: (sensorId: string, data: any) =>
+        fetchJson<any>(`/api/v1/sensors/${sensorId}/calibrations`, {
+          method: "POST",
+          body: JSON.stringify(data),
+        }),
+    },
+  },
+
+  readings: {
+    list: (params: {
+      device_id?: string;
+      sensor_type?: string;
+      from?: string;
+      to?: string;
+      interval?: 'raw' | '1m' | '1h' | '1d';
+      agg?: 'avg' | 'min' | 'max' | 'sum';
+      limit?: number;
+      offset?: number;
+    }) =>
+      fetchJson<import("@/app/types").ReadingsResponse>(
+        `/api/v1/readings?${new URLSearchParams(params as any).toString()}`
+      ),
+
+    latest: (deviceId: string) =>
+      fetchJson<import("@/app/types").ReadingLatest[]>(`/api/v1/devices/${deviceId}/readings/latest`),
+
+    summary: (params: { device_id?: string; from?: string; to?: string }) =>
+      fetchJson<any>(`/api/v1/readings/summary?${new URLSearchParams(params as any).toString()}`),
   },
 
   health: {
@@ -97,7 +187,7 @@ export const api = {
       fetchJson<import("@/app/types").DeviceHealth>(`/api/v1/devices/${deviceId}/health`),
     stale: (thresholdMinutes = 15, status?: string) =>
       fetchJson<import("@/app/types").StaleDevicesResponse>(
-        `/api/v1/devices/monitoring/stale?threshold_minutes=${thresholdMinutes}${status ? `&status=${status}` : ""}`
+        `/api/v1/devices/stale?threshold_minutes=${thresholdMinutes}${status ? `&status=${status}` : ""}`
       ),
   },
 };

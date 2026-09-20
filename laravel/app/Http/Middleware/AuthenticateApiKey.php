@@ -22,7 +22,8 @@ class AuthenticateApiKey
             throw ApiException::unauthorized('missing or invalid x-api-key header');
         }
 
-        $device = $this->db->selectOne(
+        // Get all active credentials for this API key
+        $credentials = $this->db->select(
             'SELECT d.id, d.device_code, d.name, d.status, d.firmware_version,
                     c.id AS credential_id, c.api_key, c.secret_hash
              FROM device_credentials c
@@ -31,13 +32,37 @@ class AuthenticateApiKey
                AND c.revoked_at IS NULL
                AND d.status = ?
                AND d.deleted_at IS NULL
-             ORDER BY c.created_at DESC
-             LIMIT 1',
+             ORDER BY c.created_at ASC',
             [$key, 'active'],
         );
 
-        if (! $device) {
+        if ($credentials === []) {
             throw ApiException::unauthorized('invalid or inactive API key');
+        }
+
+        // Try to match device_id from request payload (for POST ingest endpoints)
+        $payloadDeviceId = null;
+        if ($request->isMethod('POST') && $request->getContent()) {
+            $content = json_decode($request->getContent(), true);
+            if (is_array($content) && isset($content['device_id'])) {
+                $payloadDeviceId = $content['device_id'];
+            }
+        }
+
+        // Find matching credential
+        $device = null;
+        if ($payloadDeviceId !== null) {
+            foreach ($credentials as $cred) {
+                if ($cred->device_code === $payloadDeviceId || $cred->id === $payloadDeviceId) {
+                    $device = $cred;
+                    break;
+                }
+            }
+        }
+
+        // Fallback to first credential
+        if ($device === null) {
+            $device = $credentials[0];
         }
 
         $this->db->update(

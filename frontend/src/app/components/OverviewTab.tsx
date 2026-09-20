@@ -1,8 +1,9 @@
 "use client";
 
-import React, { useState } from "react";
-import type { DashboardData, DeviceInfo, SeriesPoint, RecentRow, Location } from "@/app/types";
-import { fmt, fmtTime, fmtAxis, PALETTE, deviceColor, qualityBadge } from "@/app/utils";
+import React, { useState, useMemo } from "react";
+import type { DashboardData, DeviceInfo, SeriesPoint, RecentRow, Location, ChartDataPoint } from "@/app/types";
+import { fmt, fmtTime, PALETTE, qualityBadge, getStatusColor, getStatusBadgeClass, fillTimeGaps } from "@/app/utils";
+import { LineChartWidget, DualAxisChart, BarChartWidget, AreaChartWidget } from "@/app/components/Charts";
 
 interface OverviewTabProps {
   data: DashboardData | null;
@@ -13,6 +14,7 @@ interface OverviewTabProps {
 
 export function OverviewTab({ data, error, updatedAt, onRefresh }: OverviewTabProps) {
   const [refreshing, setRefreshing] = useState(false);
+  const [chartType, setChartType] = useState<"temp" | "dual" | "rain" | "wind">("temp");
 
   const handleRefresh = async () => {
     setRefreshing(true);
@@ -24,17 +26,90 @@ export function OverviewTab({ data, error, updatedAt, onRefresh }: OverviewTabPr
     ? Array.from(new Set(data.series.map((s) => s.device_name)))
     : [];
 
-  const chartData = data
-    ? Array.from(
-        data.series.reduce((map, point) => {
-          const key = point.period_start;
-          const entry = map.get(key) ?? { period_start: key };
-          entry[point.device_name] = point.temperature_avg;
-          map.set(key, entry);
-          return map;
-        }, new Map<string, Record<string, number | string | null>>()).values()
-      ).sort((a, b) => String(a.period_start).localeCompare(String(b.period_start)))
-    : [];
+  // Transform series data for charts with gap filling
+  const chartData = useMemo(() => {
+    if (!data) return [] as ChartDataPoint[];
+
+    // Build base data grouped by period_start
+    const baseMap = new Map<string, ChartDataPoint>();
+    for (const point of data.series) {
+      const key = point.period_start;
+      const entry = baseMap.get(key) ?? { period_start: key };
+      entry[point.device_name] = point.temperature_avg;
+      baseMap.set(key, entry);
+    }
+
+    const baseData = Array.from(baseMap.values()).sort((a, b) =>
+      String(a.period_start).localeCompare(String(b.period_start))
+    );
+
+    // Fill gaps with null values (1 hour interval)
+    return fillTimeGaps(baseData, "period_start", deviceNames, 60);
+  }, [data]);
+
+  const humidityChartData = useMemo(() => {
+    if (!data) return [] as ChartDataPoint[];
+
+    const baseMap = new Map<string, ChartDataPoint>();
+    for (const point of data.series) {
+      const key = point.period_start;
+      const entry = baseMap.get(key) ?? { period_start: key };
+      entry[point.device_name] = point.humidity_avg;
+      baseMap.set(key, entry);
+    }
+
+    const baseData = Array.from(baseMap.values()).sort((a, b) =>
+      String(a.period_start).localeCompare(String(b.period_start))
+    );
+
+    return fillTimeGaps(baseData, "period_start", deviceNames, 60);
+  }, [data]);
+
+  const rainChartData = useMemo(() => {
+    if (!data) return [] as ChartDataPoint[];
+
+    const baseMap = new Map<string, ChartDataPoint>();
+    for (const point of data.series) {
+      const key = point.period_start;
+      const entry = baseMap.get(key) ?? { period_start: key };
+      entry[point.device_name] = point.rain_total_mm;
+      baseMap.set(key, entry);
+    }
+
+    const baseData = Array.from(baseMap.values()).sort((a, b) =>
+      String(a.period_start).localeCompare(String(b.period_start))
+    );
+
+    return fillTimeGaps(baseData, "period_start", deviceNames, 60);
+  }, [data]);
+
+  const windChartData = useMemo(() => {
+    if (!data) return [] as ChartDataPoint[];
+
+    const baseMap = new Map<string, ChartDataPoint>();
+    for (const point of data.series) {
+      const key = point.period_start;
+      const entry = baseMap.get(key) ?? { period_start: key };
+      entry[point.device_name + "_speed"] = point.windspeed_avg;
+      entry[point.device_name + "_dir"] = point.wind_direction_avg;
+      baseMap.set(key, entry);
+    }
+
+    const baseData = Array.from(baseMap.values()).sort((a, b) =>
+      String(a.period_start).localeCompare(String(b.period_start))
+    );
+
+    const windKeys = deviceNames.flatMap((name) => [name + "_speed", name + "_dir"]);
+    return fillTimeGaps(baseData, "period_start", windKeys, 60);
+  }, [data]);
+
+  const tempLines = deviceNames.map(name => ({ key: name, name, unit: "°C" }));
+  const humidityLines = deviceNames.map(name => ({ key: name, name, unit: "%" }));
+  const rainLines = deviceNames.map(name => ({ key: name, name, unit: "mm" }));
+  const windLines = deviceNames.flatMap(name => [
+    { key: name + "_speed", name: `${name} speed`, unit: "m/s" },
+    { key: name + "_dir", name: `${name} dir`, unit: "°" },
+  ]);
 
   return (
     <div>
@@ -82,7 +157,7 @@ export function OverviewTab({ data, error, updatedAt, onRefresh }: OverviewTabPr
                 <div className="card" key={device.id} style={{ borderLeft: `4px solid ${getStatusColor(device.status)}` }}>
                   <div className="flex justify-between items-start">
                     <h3>{device.name}</h3>
-                    <span className={`badge ${getStatusBadgeClass(device.status)}`}>
+                    <span className={`badge ${getStatusBadgeClass(device.status)}`} style={{ background: `${getStatusColor(device.status)}20`, color: getStatusColor(device.status) }}>
                       {device.status}
                     </span>
                   </div>
@@ -134,37 +209,45 @@ export function OverviewTab({ data, error, updatedAt, onRefresh }: OverviewTabPr
             })}
           </div>
 
+          <div className="controls">
+            <label>Chart:</label>
+            <select value={chartType} onChange={e => setChartType(e.target.value as any)} className="filter-select" style={{ width: "auto" }}>
+              <option value="temp">Temperature</option>
+              <option value="dual">Temp + Humidity</option>
+              <option value="rain">Rainfall</option>
+              <option value="wind">Wind Speed</option>
+            </select>
+          </div>
+
           <div className="chart">
-            <h3 className="panel-title">Hourly temperature (°C) — last 24h</h3>
+            <h3 className="panel-title">
+              {chartType === "temp" && "Hourly Temperature (°C) — last 24h"}
+              {chartType === "dual" && "Temperature & Humidity (Dual Axis)"}
+              {chartType === "rain" && "Hourly Rainfall (mm) — last 24h"}
+              {chartType === "wind" && "Wind Speed (m/s) — last 24h"}
+            </h3>
             {chartData.length === 0 ? (
               <div className="empty">no data yet</div>
             ) : (
-              <div style={{ height: 280 }}>
-                <svg viewBox="0 0 800 280" preserveAspectRatio="none" style={{ width: "100%", height: "100%" }}>
-                  {deviceNames.map((name, i) => {
-                    const color = PALETTE[i % PALETTE.length];
-                    const points = chartData
-                      .map((d, idx) => {
-                        const val = d[name];
-                        if (val === null || val === undefined) return null;
-                        const x = 40 + (idx / Math.max(1, chartData.length - 1)) * 720;
-                        const y = 240 - ((Number(val) + 40) / 80) * 220;
-                        return `${x},${y}`;
-                      })
-                      .filter(Boolean)
-                      .join(" ");
-                    return points ? (
-                      <polyline
-                        key={name}
-                        points={points}
-                        fill="none"
-                        stroke={color}
-                        strokeWidth="2"
-                      />
-                    ) : null;
-                  })}
-                </svg>
-              </div>
+              <>
+                {chartType === "temp" && (
+                  <LineChartWidget data={chartData as ChartDataPoint[]} lines={tempLines} height={320} />
+                )}
+                {chartType === "dual" && (
+                  <DualAxisChart
+                    data={chartData as ChartDataPoint[]}
+                    leftLines={tempLines}
+                    rightLines={humidityLines}
+                    height={320}
+                  />
+                )}
+                {chartType === "rain" && (
+                  <BarChartWidget data={rainChartData as ChartDataPoint[]} bars={rainLines} height={320} />
+                )}
+                {chartType === "wind" && (
+                  <LineChartWidget data={windChartData as ChartDataPoint[]} lines={windLines.filter(l => l.key.includes("_speed"))} height={320} />
+                )}
+              </>
             )}
           </div>
 
@@ -188,9 +271,7 @@ export function OverviewTab({ data, error, updatedAt, onRefresh }: OverviewTabPr
                 <tbody>
                   {data.recent.length === 0 && (
                     <tr>
-                      <td colSpan={9} className="empty">
-                        no readings yet
-                      </td>
+                      <td colSpan={9} className="empty">no readings yet</td>
                     </tr>
                   )}
                   {data.recent.map((r, i) => (
@@ -214,34 +295,4 @@ export function OverviewTab({ data, error, updatedAt, onRefresh }: OverviewTabPr
       )}
     </div>
   );
-}
-
-function getStatusColor(status: string): string {
-  switch (status) {
-    case "active":
-      return "#4ade80";
-    case "maintenance":
-      return "#facc15";
-    case "provisioned":
-      return "#38bdf8";
-    case "decommissioned":
-      return "#f87171";
-    default:
-      return "#94a3b8";
-  }
-}
-
-function getStatusBadgeClass(status: string): string {
-  switch (status) {
-    case "active":
-      return "good";
-    case "maintenance":
-      return "conflict";
-    case "provisioned":
-      return "conflict";
-    case "decommissioned":
-      return "bad";
-    default:
-      return "conflict";
-  }
 }

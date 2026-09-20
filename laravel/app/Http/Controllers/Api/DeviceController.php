@@ -90,6 +90,8 @@ final class DeviceController
         security: [['api_key' => []]],
         parameters: [
             new OA\Parameter(name: 'status', in: 'query', description: 'Filter by status', schema: new OA\Schema(type: 'string', enum: ['provisioned', 'active', 'maintenance', 'decommissioned'])),
+            new OA\Parameter(name: 'location_id', in: 'query', description: 'Filter by location UUID', schema: new OA\Schema(type: 'string', format: 'uuid')),
+            new OA\Parameter(name: 'q', in: 'query', description: 'Search by device_code or name', schema: new OA\Schema(type: 'string')),
             new OA\Parameter(name: 'page', in: 'query', schema: new OA\Schema(type: 'integer', default: 1)),
             new OA\Parameter(name: 'per_page', in: 'query', schema: new OA\Schema(type: 'integer', default: 20)),
         ],
@@ -104,6 +106,16 @@ final class DeviceController
 
         if ($request->has('status')) {
             $query->where('status', $request->status);
+        }
+        if ($request->has('location_id')) {
+            $query->where('location_id', $request->location_id);
+        }
+        if ($request->filled('q')) {
+            $search = $request->string('q')->toString();
+            $query->where(function ($q) use ($search) {
+                $q->where('device_code', 'like', "%{$search}%")
+                  ->orWhere('name', 'like', "%{$search}%");
+            });
         }
 
         $perPage = min($request->integer('per_page', 20), 100);

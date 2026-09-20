@@ -13,19 +13,21 @@ class DemoDataSeeder extends Seeder
 {
     // Fixed UUIDs untuk idempotensi
     private const LOC_IDS = [
-        '11111111-1111-4111-8111-111111111111',
-        '22222222-2222-4222-8222-222222222222',
-        '33333333-3333-4333-8333-333333333333',
+        '11111111-1111-4111-8111-111111111111',  // Jakarta Pusat
+        '22222222-2222-4222-8222-222222222222',  // Bandung Barat
+        '33333333-3333-4333-8333-333333333333',  // Surabaya Timur
+        '44444444-4444-4444-8444-444444444444',  // Garut (WS-GRT-001)
     ];
 
     private const DEV_IDS = [
-        'aaaaaaaa-0000-4000-8000-000000000001',
-        'bbbbbbbb-0000-4000-8000-000000000001',
-        'cccccccc-0000-4000-8000-000000000001',
+        'aaaaaaaa-0000-4000-8000-000000000001',  // DEMO-001
+        'bbbbbbbb-0000-4000-8000-000000000001',  // DEMO-002
+        'cccccccc-0000-4000-8000-000000000001',  // DEMO-003
+        'dddddddd-0000-4000-8000-000000000001',  // WS-GRT-001 (Garut)
     ];
 
-    private const DEV_CODES = ['DEMO-001', 'DEMO-002', 'DEMO-003'];
-    private const DEV_NAMES = ['Jakarta Pusat', 'Bandung Barat', 'Surabaya Timur'];
+    private const DEV_CODES = ['DEMO-001', 'DEMO-002', 'DEMO-003', 'WS-GRT-001'];
+    private const DEV_NAMES = ['Jakarta Pusat', 'Bandung Barat', 'Surabaya Timur', 'Garut'];
 
     private function sensorId(int $n): string
     {
@@ -37,11 +39,12 @@ class DemoDataSeeder extends Seeder
 
     public function run(): void
     {
-        // 3 lokasi
+        // 3 lokasi + Garut
         $locations = [
             [self::LOC_IDS[0], 'Jakarta Pusat', -6.200000, 106.816667, 8.00],
             [self::LOC_IDS[1], 'Bandung Barat', -6.917464, 107.619123, 768.00],
             [self::LOC_IDS[2], 'Surabaya Timur', -7.257472, 112.752088, 3.00],
+            [self::LOC_IDS[3], 'Garut', -7.214000, 107.906000, 717.00],
         ];
         foreach ($locations as $loc) {
             DB::statement(
@@ -52,10 +55,15 @@ class DemoDataSeeder extends Seeder
             );
         }
 
-        // 3 device aktif
-        for ($d = 0; $d < 3; $d++) {
+        // 4 device aktif (termasuk WS-GRT-001 untuk testing F.1 payload)
+        for ($d = 0; $d < 4; $d++) {
             $devId = self::DEV_IDS[$d];
             $locId = self::LOC_IDS[$d];
+            
+            // WS-GRT-001 pakai fw 1.4.2 sesuai spec F.1, lain 1.0.0
+            $fwVersion = $d === 3 ? '1.4.2' : '1.0.0';
+            
+            // Setiap device pakai API key unik (unique constraint pada api_key)
             $apiKey = $d === 0
                 ? (string) env('DEMO_DEVICE_API_KEY', 'dev_demo_weather_station_2024')
                 : 'dev_demo_' . strtolower(self::DEV_CODES[$d]) . '_2024';
@@ -67,7 +75,7 @@ class DemoDataSeeder extends Seeder
                 "INSERT INTO devices (id, device_code, name, location_id, status, firmware_version)
                  VALUES (?, ?, ?, ?, 'active', ?)
                  ON CONFLICT (id) DO NOTHING",
-                [$devId, self::DEV_CODES[$d], self::DEV_NAMES[$d], $locId, '1.0.0']
+                [$devId, self::DEV_CODES[$d], self::DEV_NAMES[$d], $locId, $fwVersion]
             );
 
             DB::statement(
@@ -94,9 +102,9 @@ class DemoDataSeeder extends Seeder
             // Device health
             DB::statement(
                 "INSERT INTO device_health (device_id, battery_voltage, rssi, firmware_version, uptime_seconds)
-                 VALUES (?, 4.12, -65, '1.0.0', 86400)
+                 VALUES (?, 4.12, -65, ?, 86400)
                  ON CONFLICT (device_id) DO NOTHING",
-                [$devId]
+                [$devId, $fwVersion]
             );
         }
 

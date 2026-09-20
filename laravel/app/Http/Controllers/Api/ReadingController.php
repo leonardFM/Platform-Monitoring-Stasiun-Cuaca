@@ -73,6 +73,66 @@ final class ReadingController
     }
 
     #[OA\Get(
+        path: '/api/v1/devices/{id}/readings/latest',
+        tags: ['devices'],
+        security: [['api_key' => []]],
+        parameters: [
+            new OA\Parameter(name: 'id', in: 'path', required: true, schema: new OA\Schema(type: 'string', format: 'uuid')),
+        ],
+        responses: [
+            new OA\Response(response: '200', description: 'Latest reading per sensor for a device', content: new OA\JsonContent(ref: '#/components/schemas/DeviceLatestReadingsResponse')),
+            new OA\Response(response: '401', description: 'Unauthorized', content: new OA\JsonContent(ref: '#/components/schemas/ErrorEnvelope')),
+            new OA\Response(response: '404', description: 'Device not found', content: new OA\JsonContent(ref: '#/components/schemas/ErrorEnvelope')),
+        ]
+    )]
+    public function latest(Request $request, string $device): JsonResponse
+    {
+        $deviceModel = Device::find($device);
+
+        if (! $deviceModel) {
+            throw ApiException::notFound('Device not found');
+        }
+
+        $rows = DB::select(
+            'SELECT DISTINCT ON (st.code)
+                    sr.device_time, sr.raw_value, sr.corrected_value, sr.quality_flag,
+                    s.id AS sensor_id, s.serial_number,
+                    st.code AS sensor_code, st.name AS sensor_name, st.unit
+             FROM sensor_readings sr
+             JOIN sensors s ON s.id = sr.sensor_id AND s.deleted_at IS NULL
+             JOIN sensor_types st ON st.id = s.sensor_type_id
+             JOIN sensor_installations si ON si.sensor_id = s.id
+                 AND si.device_id = ?
+                 AND si.installed_at <= sr.device_time
+                 AND (si.removed_at IS NULL OR si.removed_at > sr.device_time)
+             WHERE sr.device_id = ?
+             ORDER BY st.code ASC, sr.device_time DESC',
+            [$deviceModel->id, $deviceModel->id],
+        );
+
+        $data = [];
+        foreach ($rows as $row) {
+            $data[] = [
+                'sensor_id' => (string) $row->sensor_id,
+                'serial_number' => $row->serial_number,
+                'sensor_code' => $row->sensor_code,
+                'sensor_name' => $row->sensor_name,
+                'unit' => $row->unit,
+                'device_time' => Carbon::parse($row->device_time)->toIso8601ZuluString(),
+                'raw_value' => self::num($row->raw_value),
+                'corrected_value' => self::num($row->corrected_value),
+                'quality_flag' => $row->quality_flag,
+            ];
+        }
+
+        return response()->json([
+            'device_id' => (string) $deviceModel->id,
+            'device_name' => $deviceModel->name,
+            'data' => $data,
+        ]);
+    }
+
+    #[OA\Get(
         path: '/api/v1/readings/summary',
         tags: ['readings'],
         security: [['api_key' => []]],

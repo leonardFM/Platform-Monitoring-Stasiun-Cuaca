@@ -1,3 +1,5 @@
+import React from "react";
+
 export interface Location {
   id: string;
   name: string;
@@ -106,4 +108,104 @@ export interface StaleDevicesResponse {
   threshold_minutes: number;
   count: number;
   data: StaleDevice[];
+}
+
+export interface SensorType {
+  id: string;
+  code: string;
+  name: string;
+  unit: string;
+  valid_min: number | null;
+  valid_max: number | null;
+  precision: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface SensorTypeList {
+  data: SensorType[];
+  pagination: Pagination;
+}
+
+export interface Sensor {
+  id: string;
+  serial_number: string;
+  sensor_type: SensorType;
+  manufacturer: string;
+  model: string;
+  status: string;
+  created_at: string;
+  updated_at: string;
+  deleted_at: string | null;
+}
+
+export interface SensorList {
+  data: Sensor[];
+  pagination: Pagination;
+}
+
+export interface DeviceSensor {
+  sensor_id: string;
+  serial_number: string;
+  sensor_type: SensorType;
+  status: string;
+  installed_at: string;
+}
+
+export interface DeviceSensorList {
+  data: DeviceSensor[];
+}
+
+export interface Pagination {
+  current_page: number;
+  last_page: number;
+  per_page: number;
+  total: number;
+}
+
+export interface ReadingPoint {
+  bucket_start: string;
+  interval: string;
+  sensor_id: string;
+  sensor_code: string;
+  sensor_name: string;
+  unit: string;
+  device_id: string;
+  device_code: string;
+  device_name: string;
+  min_value: number | null;
+  max_value: number | null;
+  avg_value: number | null;
+  sum_value: number | null;
+  sample_count: number;
+  quality_count: number;
+}
+
+export interface ReadingsResponse {
+  data: ReadingPoint[];
+  meta: {
+    interval: string;
+    from: string;
+    to: string;
+    limit: number;
+    offset: number;
+    total: number;
+  };
+}
+
+export interface ReadingLatest {
+  device_id: string;
+  sensor_id: string;
+  sensor_code: string;
+  sensor_name: string;
+  unit: string;
+  device_time: string;
+  raw_value: number;
+  corrected_value: number | null;
+  quality_flag: string;
+}
+
+export interface ChartDataPoint {
+  period_start: string;
+  [key: string]: string | number | null;
 }

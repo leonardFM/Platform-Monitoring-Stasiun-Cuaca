@@ -1,0 +1,79 @@
+================================================================================
+  WEATHER STATION | URUTAN UJI MANUAL DARI POSTMAN — Fase 2 (workers/queue)
+  Runtime yang dijadikan basis: key + ID di bawah SEMUA sudah pernah kuresolusi
+  dengan HTTP 200 di sesi [20-Sep-2026]. Bukan placeholder.
+================================================================================
+
+PERSIAPAN (sekali saja)
+--------------------------------------------------------------------------------
+1. base URL  : http://localhost:8080/api/v1
+2. API Key   : dev_demo_weather_station_2024
+   (kirim/header bernama X-API-Key — middleware auth.api_key membaca ini)
+3. ID perangkat & sensor (sudah ada di DB, tinggal pakai):
+   device = aaaaaaaa-0000-4000-8000-000000000001   (Jakarta Pusat)
+   sensor = a0000000-0000-4000-8000-000000000001   (temp_air)
+
+URUTAN EKSEKUSI (dari yang paling aman → paling membuktikan)
+--------------------------------------------------------------------------------
+LANGKAH 1 [READ]  — bukti koneksi API hidup (tanpa tulis apa-apa)
+  GET  {{base}}/dashboard
+  Header: X-API-Key: dev_demo_weather_station_2024
+  Harap => 200 (JSON dashboard). Kalau 401 = key salah ketik.
+
+LANGKAH 2 [READ]  — bukti group auth.api_key (alias middleware) resolve
+  GET  {{base}}/sensor-types
+  Header: X-API-Key: dev_demo_weather_station_2024
+  Harap => 200 (list of SensorType). (Dulu endpoint ini 500; sesudah fix
+          Router::aliasMiddleware => 200.)
+
+LANGKAH 3 [READ]  — katalog sensor terpasang
+  GET  {{base}}/sensors
+  Header: X-API-Key: dev_demo_weather_station_2024
+  Harap => 200.
+
+LANGKAH 4 [READ]  — hot path device: readings terakhir sensor ini
+  GET  {{base}}/devices/aaaaaaaa-0000-4000-8000-000000000001/sensors
+  Header: X-API-Key: dev_demo_weather_station_2024
+  Harap => 200 (daftar SensorInstallation utk device itu).
+
+LANGKAH 5 [WRITE] — INI yang benar-benar memicu worker (queue/ingest)
+  POST {{base}}/ingest/telemetry
+  Header: X-API-Key: dev_demo_weather_station_2024
+  Header: Content-Type: application/json
+  Body (raw JSON):
+  {
+    "device_id": "aaaaaaaa-0000-4000-8000-000000000001",
+    "sensor_id": "a0000000-0000-4000-8000-000000000001",
+    "device_time": "2026-09-20T09:30:00Z",
+    "seq": 61119,
+    "raw_value": 27.4
+  }
+  Harap => 201 Created + JSON berisi reading (kalau sensor belum ada untuk
+  device ini, endpoint balas 404/422 "device/sensor tidak terpasang" —
+  bukan 500; itu normal & bukan regresi, artinya validasi relasi bekerja).
+
+LANGKAH 6 [VERIFIKASI WORKER] — buktikan queue benar-benar diproses
+  Setelah LANGKAH 5, dari terminal:
+    docker compose logs --since=2m worker | grep -E "Processing|Processed"
+    => muncul "Processing ... WeatherStation/ReadingJob ... Processed ... DONE"
+       = worker menerima job dari queue dan mencatat dibaca 1x.
+  Kedua, agregat dashboard diperbarui otomatis tiap menit oleh scheduler:
+    docker compose logs --since=3m worker | grep "aggregates:recalculate"
+    => baris [aggregates:recalculate] DONE tiap ~60 detik.
+
+LANGKAH 7 [READ] — hasil tersimpan (read-nya agnostik terhadap worker)
+  GET  {{base}}/devices/aaaaaaaa-0000-4000-8000-000000000001/readings
+       ?interval=1m&from=2026-09-20T09:30:00Z&to=2026-09-20T09:31:00Z
+  Header: X-API-Key: dev_demo_weather_station_2024
+  Harap => 200 dengan min/max/avg/sum untuk window itu (buatnya dari agregat
+  yang dikerjakan worker/scheduler — bukan dari `curl` acak).
+
+CATATAN PENTING (supaya tidak salah kira "500" lagi)
+  * Semua alamat di atas ber-*prefix /api/v1 — kalau URL-mu tanpa itu atau
+    port beda, Laravel balas 404, bukan 500.
+  * Key di LANGKAH 1-7 adalah SEBUAH key nyata (bukan `dev_*` fiktif); kalau
+    kau memakai key lain, endpoint balas 401 — bukan 500.
+  * Dulu (sebelum fix) SEMUA group `auth.api_key` lempar 500 `Target class
+    [auth.api_key] does not exist`; itu sudah kuperbaiki dengan mendaftarkan
+    alias middleware lewat `Router::aliasMiddleware()` + `bootstrap/app.php`
+    group resolusi. Sekarang group tsb resolve dan 200.

@@ -60,7 +60,7 @@ return new class extends Migration
             CREATE INDEX idx_readings_device_time
                 ON sensor_readings (device_id, device_time DESC);
 
-            CREATE FUNCTION sensor_readings_set_reading_key() RETURNS trigger
+            CREATE OR REPLACE FUNCTION sensor_readings_set_reading_key() RETURNS trigger
             LANGUAGE plpgsql AS $$
             BEGIN
                 IF NEW.reading_key IS NULL THEN
@@ -120,8 +120,10 @@ return new class extends Migration
         );
     }
 
-    public function down(): void
-    {
-        Schema::dropIfExists('sensor_readings');
-    }
+public function down(): void
+        {
+            DB::unprepared('DROP TRIGGER IF EXISTS trg_sensor_readings_reading_key ON sensor_readings');
+            DB::unprepared('DROP FUNCTION IF EXISTS sensor_readings_set_reading_key()');
+            Schema::dropIfExists('sensor_readings');
+        }
 };

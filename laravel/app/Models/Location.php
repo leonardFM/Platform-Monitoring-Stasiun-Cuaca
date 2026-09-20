@@ -28,6 +28,17 @@ class Location extends Model
         'altitude' => 'decimal:2',
     ];
 
+    public static function boot(): void
+    {
+        parent::boot();
+
+        static::creating(function ($model) {
+            if (empty($model->id)) {
+                $model->id = (string) \Illuminate\Support\Str::uuid();
+            }
+        });
+    }
+
     public function devices(): HasMany
     {
         return $this->hasMany(Device::class, 'location_id');
