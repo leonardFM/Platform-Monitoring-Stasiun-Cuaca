@@ -33,6 +33,16 @@ class ApiException extends RuntimeException
         return new self('payload_too_large', $message, 413);
     }
 
+    public static function tooManyRequests(string $message): self
+    {
+        return new self('too_many_requests', $message, 429);
+    }
+
+    public static function conflict(string $message): self
+    {
+        return new self('conflict', $message, 409);
+    }
+
     public static function notFound(string $message): self
     {
         return new self('not_found', $message, 404);

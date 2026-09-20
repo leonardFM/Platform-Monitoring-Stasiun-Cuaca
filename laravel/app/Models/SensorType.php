@@ -30,6 +30,15 @@ class SensorType extends Model
         'precision' => 'decimal:6',
     ];
 
+    protected static function booted(): void
+    {
+        static::creating(function ($model) {
+            if (empty($model->id)) {
+                $model->id = (string) \Illuminate\Support\Str::uuid();
+            }
+        });
+    }
+
     public function sensors(): HasMany
     {
         return $this->hasMany(Sensor::class, 'sensor_type_id');

@@ -15,17 +15,30 @@ class SensorInstallation extends Model
     public $incrementing = false;
     protected $keyType = 'string';
 
+    public $timestamps = false;
+
     protected $fillable = [
         'sensor_id',
         'device_id',
         'installed_at',
         'removed_at',
+        'created_at',
     ];
 
     protected $casts = [
         'installed_at' => 'datetime',
         'removed_at' => 'datetime',
+        'created_at' => 'datetime',
     ];
+
+    protected static function booted(): void
+    {
+        static::creating(function ($model) {
+            if (empty($model->id)) {
+                $model->id = (string) \Illuminate\Support\Str::uuid();
+            }
+        });
+    }
 
     public function sensor(): BelongsTo
     {

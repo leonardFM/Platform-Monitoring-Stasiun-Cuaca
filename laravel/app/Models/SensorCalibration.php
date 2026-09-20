@@ -15,20 +15,33 @@ class SensorCalibration extends Model
     public $incrementing = false;
     protected $keyType = 'string';
 
+    public $timestamps = false;
+
     protected $fillable = [
         'sensor_id',
-        'gain',
         'offset',
-        'valid_from',
-        'valid_to',
+        'scale',
+        'effective_from',
+        'effective_to',
+        'created_at',
     ];
 
     protected $casts = [
-        'gain' => 'decimal:6',
         'offset' => 'decimal:6',
-        'valid_from' => 'datetime',
-        'valid_to' => 'datetime',
+        'scale' => 'decimal:6',
+        'effective_from' => 'datetime',
+        'effective_to' => 'datetime',
+        'created_at' => 'datetime',
     ];
+
+    protected static function booted(): void
+    {
+        static::creating(function ($model) {
+            if (empty($model->id)) {
+                $model->id = (string) \Illuminate\Support\Str::uuid();
+            }
+        });
+    }
 
     public function sensor(): BelongsTo
     {
