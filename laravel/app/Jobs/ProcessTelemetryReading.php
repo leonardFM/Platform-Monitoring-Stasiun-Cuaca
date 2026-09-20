@@ -14,14 +14,13 @@ class ProcessTelemetryReading implements ShouldQueue
 
     public function __construct(
         public string $deviceId,
-        public string $messageId,
-        public string $takenAt,
-        public array $sensors,
+        public ?string $fw,
+        public array $items,
     ) {
     }
 
     public function handle(TelemetryProcessor $processor): void
     {
-        $processor->process($this->deviceId, $this->messageId, $this->takenAt, $this->sensors);
+        $processor->processItems($this->deviceId, $this->fw, $this->items);
     }
 }

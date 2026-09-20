@@ -48,7 +48,9 @@ return new class extends Migration
                         'CLOCK_DRIFT',
                         'LATE',
                         'INVALID',
-                        'DUPLICATE'
+                        'DUPLICATE',
+                        'RAIN_INITIAL',
+                        'RAIN_RESET'
                     )
                 )
             ) PARTITION BY RANGE (device_time);

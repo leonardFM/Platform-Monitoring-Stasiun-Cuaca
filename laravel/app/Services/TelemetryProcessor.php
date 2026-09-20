@@ -8,92 +8,151 @@ use Illuminate\Support\Facades\Log;
 use Throwable;
 
 /**
- * RabbitMQ consumer pipeline. Every accepted telemetry message is processed
- * here: device lookup, strict range/quality flagging, calibration, per-device
- * serialized rain-delta computation and idempotent persistence with hourly/
- * daily aggregate rollups. Mirrors the original worker implementation.
+ * Pipeline pemrosesan payload F.1 (worker/RabbitMQ consumer).
+ *
+ * - Lookup device aktif + peta sensor terpasang (dengan kalibrasi efektif).
+ * - Tiap sensor DIVIDES dalam readings[] => 1 baris di sensor_readings.
+ * - Sensor yang tidak ada di readings[] atau tidak terpasang => diabaikan (null).
+ * - rain_counter: delta counter * 0.2 mm; first reading => RAIN_INITIAL (0 mm);
+ *   counter turun (device restart) => RAIN_RESET (0 mm, tidak minus).
+ * - Kondisi di luar batas => quality flag OUT_OF_RANGE; -999 (kode error sensor)
+ *   => SENSOR_ERROR.
+ * - Idempotensi: ON CONFLICT (reading_key, device_time) DO NOTHING.
+ * - Di akhir: update device_health + devices.last_seen_at/last_device_time.
  */
 class TelemetryProcessor
 {
-    public function process(string $deviceId, string $messageId, string $takenAt, array $sensors): void
+    private const INSERT_CHUNK = 500;
+
+    public function processItems(string $deviceId, ?string $fw, array $items): void
     {
-        $takenAt = Carbon::parse($takenAt);
-
-        $device = DB::selectOne(
-            'SELECT is_active, calibration FROM devices WHERE id = ?',
-            [$deviceId],
-        );
-
-        if (! $device || ! self::truthy($device->is_active)) {
-            Log::info('device not found or inactive, skipping', [
-                'device_id' => $deviceId,
-                'message_id' => $messageId,
-            ]);
-
+        if ($items === []) {
             return;
         }
 
-        $qualityFlags = self::rangeErrors($sensors);
-        $qualityScore = self::qualityScoreFor($qualityFlags);
+        $device = DB::selectOne(
+            'SELECT id, device_code, status, firmware_version
+             FROM devices WHERE id = ? AND deleted_at IS NULL',
+            [$deviceId],
+        );
 
-        $calibration = self::calibrationMap($device->calibration);
-        $calibrated = self::applyCalibration($sensors, $calibration);
-        if (count($calibration) > 0) {
-            $qualityFlags[] = 'calibrated';
+        if (! $device) {
+            Log::info('telemetry skipped: device not found', ['device_id' => $deviceId]);
+            return;
         }
+        if ($device->status !== 'active') {
+            Log::info('telemetry skipped: device not active', ['device_id' => $deviceId, 'status' => $device->status]);
+            return;
+        }
+
+        $sensorMap = $this->installedSensorMap($deviceId);
+
+        $calibrations = $this->sensorCalibrations($deviceId);
+        $rainSensorId = $sensorMap['rain_counter'] ?? null;
 
         DB::beginTransaction();
 
         try {
+            // Serialisasi per-device supaya kalkulasi delta rain aman dari
+            // proses worker lain yang menangani device yang sama.
             DB::statement(
                 'SELECT pg_advisory_xact_lock(hashtextextended(?::text, 0))',
                 [$deviceId],
             );
 
-            $previous = DB::selectOne(
-                'SELECT rain_counter, taken_at FROM telemetry_readings
-                 WHERE device_id = ? ORDER BY taken_at DESC LIMIT 1',
-                [$deviceId],
-            );
+            $rainBaseline = $this->rainBaseline($rainSensorId, $deviceId, $items);
+            $rainState = $rainBaseline; // null = belum pernah ada pembacaan rain
 
-            [$rainDelta, $rainFlags] = self::rainDelta($previous, $takenAt, $sensors['rain_counter']);
+            $rows = [];
+            $serverTime = Carbon::now();
+            $maxDeviceTime = null;
+            $lastItem = null;
 
-            if (in_array('rain_initial', $rainFlags, true)) {
-                $qualityScore = max(0, $qualityScore - 5);
+            $flush = function () use (&$rows): void {
+                if ($rows === []) {
+                    return;
+                }
+                $chunk = array_splice($rows, 0);
+                $values = implode(',', array_fill(0, count($chunk), '(?, ?, ?, ?, ?, ?, ?, ?)'));
+                $params = [];
+                foreach ($chunk as $row) {
+                    foreach ($row as $value) {
+                        $params[] = $value;
+                    }
+                }
+                DB::statement(
+                    'INSERT INTO sensor_readings (device_id, sensor_id, device_time, server_time, seq, raw_value, corrected_value, quality_flag)
+                     VALUES ' . $values . '
+                     ON CONFLICT (reading_key, device_time) DO NOTHING',
+                    $params,
+                );
+            };
+
+            foreach ($items as $item) {
+                $ts = Carbon::parse($item['ts']);
+                $seq = (int) $item['seq'];
+                $clockFlag = $this->clockFlag($ts);
+                $shard = [
+                    'ts' => $ts,
+                    'seq' => $seq,
+                    'battery_v' => $item['battery_v'] ?? null,
+                    'rssi' => $item['rssi'] ?? null,
+                    'readings' => $item['readings'],
+                ];
+
+                foreach ($item['readings'] as $code => $value) {
+                    $sensorId = $sensorMap[$code] ?? null;
+                    if ($sensorId === null) {
+                        continue; // tidak terpasang / tidak dikirim -> null
+                    }
+
+                    $cal = $this->effectiveCalibration($calibrations[$sensorId] ?? [], $ts);
+
+                    if ($code === 'rain_counter') {
+                        [$raw, $corrected, $quality, $rainState] = $this->rainValue(
+                            $value,
+                            $rainState,
+                        );
+                    } else {
+                        [$raw, $corrected, $quality] = $this->qualityAndCalibrate($code, $value, $cal);
+                    }
+
+                    $quality = $this->applyClockFlag($quality, $clockFlag);
+
+                    $rows[] = [
+                        $deviceId,
+                        $sensorId,
+                        $ts->toIso8601String(),
+                        $serverTime->toIso8601String(),
+                        $seq,
+                        $raw,
+                        $corrected,
+                        $quality,
+                    ];
+
+                    if (count($rows) >= self::INSERT_CHUNK) {
+                        $flush();
+                    }
+                }
+
+                $maxDeviceTime = $maxDeviceTime === null || $ts->greaterThan($maxDeviceTime) ? $ts : $maxDeviceTime;
+                $lastItem = $shard;
             }
-            if (in_array('rain_reset', $rainFlags, true)) {
-                $qualityScore = max(0, $qualityScore - 5);
+
+            $flush();
+
+            if ($maxDeviceTime !== null && $lastItem !== null) {
+                $this->upsertHealth($deviceId, $fw, $lastItem);
+                $this->touchDevice($deviceId, $fw, $maxDeviceTime);
             }
-            $qualityFlags = array_merge($qualityFlags, $rainFlags);
-
-            $inserted = self::insertReading(
-                $deviceId,
-                $messageId,
-                $takenAt,
-                $calibrated,
-                $rainDelta,
-                $qualityFlags,
-                $qualityScore,
-            );
-
-            if (! $inserted) {
-                DB::rollBack();
-                Log::info('duplicate message_id, skipping', [
-                    'device_id' => $deviceId,
-                    'message_id' => $messageId,
-                ]);
-
-                return;
-            }
-
-            $this->upsertAggregates($deviceId, $takenAt, $calibrated, $rainDelta);
 
             DB::commit();
 
-            Log::info('reading persisted', [
+            Log::info('telemetry persisted', [
                 'device_id' => $deviceId,
-                'message_id' => $messageId,
-                'quality_score' => $qualityScore,
+                'device_code' => $device->device_code,
+                'items' => count($items),
+                'rows' => self::rowCount($items),
             ]);
         } catch (Throwable $e) {
             if (DB::transactionLevel() > 0) {
@@ -104,212 +163,233 @@ class TelemetryProcessor
         }
     }
 
-    private function insertReading(
-        string $deviceId,
-        string $messageId,
-        Carbon $takenAt,
-        array $calibrated,
-        float $rainDelta,
-        array $qualityFlags,
-        int $qualityScore,
-    ): bool {
-        $affected = DB::update(
-            "INSERT INTO telemetry_readings (
-                device_id, message_id, taken_at,
-                temperature_c, humidity_pct, pressure_hpa,
-                windspeed_ms, wind_direction_deg, rain_counter,
-                rain_delta_mm, quality_flags, quality_score
-            )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT (device_id, message_id, taken_at) DO NOTHING",
-            [
-                $deviceId,
-                $messageId,
-                $takenAt->toIso8601String(),
-                $calibrated['temperature_c'],
-                $calibrated['humidity_pct'],
-                $calibrated['pressure_hpa'],
-                $calibrated['windspeed_ms'],
-                $calibrated['wind_direction_deg'],
-                $calibrated['rain_counter'],
-                $rainDelta,
-                json_encode($qualityFlags),
-                $qualityScore,
-            ],
+    /**
+     * Sensor terpasang per kode tipe, satu sensor aktif per tipe untuk routing payload.
+     */
+    private function installedSensorMap(string $deviceId): array
+    {
+        $rows = DB::select(
+            'SELECT st.code, si.sensor_id
+             FROM sensor_installations si
+             JOIN sensors s ON s.id = si.sensor_id
+             JOIN sensor_types st ON st.id = s.sensor_type_id
+             WHERE si.device_id = ? AND si.removed_at IS NULL',
+            [$deviceId],
         );
 
-        return $affected === 1;
-    }
-
-    private function upsertAggregates(string $deviceId, Carbon $takenAt, array $c, float $rainDelta): void
-    {
-        foreach (['hour', 'day'] as $granularity) {
-            DB::update(
-                "INSERT INTO station_aggregates (
-                    device_id, granularity, period_start, count,
-                    temperature_avg, temperature_min, temperature_max,
-                    humidity_avg, humidity_min, humidity_max,
-                    pressure_avg, pressure_min, pressure_max,
-                    windspeed_avg, windspeed_min, windspeed_max,
-                    wind_direction_avg, rain_total_mm
-                )
-                VALUES (?, ?, date_trunc(?::text, ?::timestamptz), 1,
-                    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT (device_id, granularity, period_start) DO UPDATE SET
-                    count = station_aggregates.count + 1,
-                    temperature_avg = (station_aggregates.temperature_avg * station_aggregates.count + excluded.temperature_avg) / (station_aggregates.count + 1),
-                    temperature_min = LEAST(station_aggregates.temperature_min, excluded.temperature_min),
-                    temperature_max = GREATEST(station_aggregates.temperature_max, excluded.temperature_max),
-                    humidity_avg = (station_aggregates.humidity_avg * station_aggregates.count + excluded.humidity_avg) / (station_aggregates.count + 1),
-                    humidity_min = LEAST(station_aggregates.humidity_min, excluded.humidity_min),
-                    humidity_max = GREATEST(station_aggregates.humidity_max, excluded.humidity_max),
-                    pressure_avg = (station_aggregates.pressure_avg * station_aggregates.count + excluded.pressure_avg) / (station_aggregates.count + 1),
-                    pressure_min = LEAST(station_aggregates.pressure_min, excluded.pressure_min),
-                    pressure_max = GREATEST(station_aggregates.pressure_max, excluded.pressure_max),
-                    windspeed_avg = (station_aggregates.windspeed_avg * station_aggregates.count + excluded.windspeed_avg) / (station_aggregates.count + 1),
-                    windspeed_min = LEAST(station_aggregates.windspeed_min, excluded.windspeed_min),
-                    windspeed_max = GREATEST(station_aggregates.windspeed_max, excluded.windspeed_max),
-                    wind_direction_avg = (station_aggregates.wind_direction_avg * station_aggregates.count + excluded.wind_direction_avg) / (station_aggregates.count + 1),
-                    rain_total_mm = station_aggregates.rain_total_mm + excluded.rain_total_mm",
-                [
-                    $deviceId,
-                    $granularity,
-                    $granularity,
-                    $takenAt->toIso8601String(),
-                    $temperature = $c['temperature_c'],
-                    $temperature,
-                    $temperature,
-                    $humidity = $c['humidity_pct'],
-                    $humidity,
-                    $humidity,
-                    $pressure = $c['pressure_hpa'],
-                    $pressure,
-                    $pressure,
-                    $windspeed = $c['windspeed_ms'],
-                    $windspeed,
-                    $windspeed,
-                    $c['wind_direction_deg'],
-                    $rainDelta,
-                ],
-            );
+        $map = [];
+        foreach ($rows as $row) {
+            if (! isset($map[$row->code])) {
+                $map[$row->code] = $row->sensor_id;
+            }
         }
+
+        return $map;
     }
 
     /**
-     * Strict physical bounds per sensor (worker-side quality flagging).
+     * Semua baris kalibrasi sensor device (beserta rentang efektifnya),
+     * dipilih per ts di PHP.
      */
+    private function sensorCalibrations(string $deviceId): array
+    {
+        $rows = DB::select(
+            'SELECT si.sensor_id, sc.offset, sc.scale, sc.effective_from, sc.effective_to
+             FROM sensor_installations si
+             JOIN sensors s ON s.id = si.sensor_id
+             LEFT JOIN sensor_calibrations sc ON sc.sensor_id = si.sensor_id
+             WHERE si.device_id = ? AND si.removed_at IS NULL
+             ORDER BY si.sensor_id, sc.effective_from',
+            [$deviceId],
+        );
+
+        $map = [];
+        foreach ($rows as $row) {
+            $map[$row->sensor_id][] = [
+                'offset' => (float) ($row->offset ?? 0),
+                'scale' => (float) ($row->scale ?? 1),
+                'effective_from' => $row->effective_from ? Carbon::parse($row->effective_from) : null,
+                'effective_to' => $row->effective_to ? Carbon::parse($row->effective_to) : null,
+            ];
+        }
+
+        return $map;
+    }
+
+    private function effectiveCalibration(array $list, Carbon $ts): ?array
+    {
+        $selected = null;
+        foreach ($list as $cal) {
+            if ($cal['effective_from'] && $cal['effective_from']->greaterThan($ts)) {
+                continue;
+            }
+            if ($cal['effective_to'] && $cal['effective_to']->lessThanOrEqualTo($ts)) {
+                continue;
+            }
+            if ($selected === null || $cal['effective_from'] >= $selected['effective_from']) {
+                $selected = $cal;
+            }
+        }
+
+        return $selected;
+    }
+
+    private function rainBaseline(?string $rainSensorId, string $deviceId, array $items): ?float
+    {
+        if ($rainSensorId === null) {
+            return null;
+        }
+
+        $minTs = null;
+        foreach ($items as $item) {
+            $ts = Carbon::parse($item['ts']);
+            if ($minTs === null || $ts->lessThan($minTs)) {
+                $minTs = $ts;
+            }
+        }
+
+        $baseline = DB::selectOne(
+            'SELECT raw_value FROM sensor_readings
+             WHERE sensor_id = ? AND device_id = ? AND device_time < ? AND raw_value >= 0
+             ORDER BY device_time DESC LIMIT 1',
+            [$rainSensorId, $deviceId, $minTs?->toIso8601String()],
+        );
+
+        return $baseline ? (float) $baseline->raw_value : null;
+    }
+
+    /**
+     * Delta rain dalam mm (0.2 mm per tip), menangani pertama kali dan reset.
+     *
+     * @return array{0: float, 1: ?float, 2: string, 3: ?float} raw, mm, flag, stateCounter
+     */
+    private function rainValue(float $current, ?float $state): array
+    {
+        if ($current === -999.0 || $current < 0) {
+            return [$current, null, 'SENSOR_ERROR', $current];
+        }
+
+        if ($state === null) {
+            return [$current, 0.0, 'RAIN_INITIAL', $current];
+        }
+
+        $delta = $current - $state;
+        if ($delta < 0) {
+            return [$current, 0.0, 'RAIN_RESET', $current];
+        }
+
+        return [$current, round($delta * 0.2, 4), 'GOOD', $current];
+    }
+
+    /**
+     * Quality flag + corrected (raw * scale + offset). -999 = kode error sensor.
+     *
+     * @return array{0: float, 1: ?float, 2: string} raw, corrected, flag
+     */
+    private function qualityAndCalibrate(string $code, float $value, ?array $cal): array
+    {
+        $isSensorError = $value === -999.0;
+
+        [$lo, $hi] = self::sensorBounds()[$code];
+
+        if ($isSensorError) {
+            return [$value, null, 'SENSOR_ERROR'];
+        }
+
+        $scale = $cal['scale'] ?? 1.0;
+        $offset = $cal['offset'] ?? 0.0;
+        $corrected = $value * $scale + $offset;
+
+        if ($value < $lo || $value > $hi) {
+            return [$value, $corrected, 'OUT_OF_RANGE'];
+        }
+
+        return [$value, $corrected, 'GOOD'];
+    }
+
+    /**
+     * Kebijakan jam device (F.3#1): ts terlalu maju => CLOCK_DRIFT,
+     * ts terlalu tua (>7 hari) => LATE. Tetap diterima (tidak ditolak).
+     */
+    private function clockFlag(Carbon $ts): ?string
+    {
+        if ($ts->greaterThan(Carbon::now()->addMinutes(5))) {
+            return 'CLOCK_DRIFT';
+        }
+
+        if ($ts->lessThan(Carbon::now()->subDays(7))) {
+            return 'LATE';
+        }
+
+        return null;
+    }
+
+    private function applyClockFlag(string $quality, ?string $clockFlag): string
+    {
+        if ($clockFlag === null) {
+            return $quality;
+        }
+
+        if (in_array($quality, ['GOOD', 'OUT_OF_RANGE'], true)) {
+            return $clockFlag;
+        }
+
+        return $quality; // SENSOR_ERROR & RAIN_* tetap dipertahankan
+    }
+
     public static function sensorBounds(): array
     {
         return [
-            'temperature_c' => [-60.0, 60.0],
-            'humidity_pct' => [0.0, 100.0],
-            'pressure_hpa' => [800.0, 1100.0],
-            'windspeed_ms' => [0.0, 100.0],
-            'wind_direction_deg' => [0.0, 360.0],
+            'temp_air' => [-60.0, 70.0],
+            'humidity' => [0.0, 100.0],
+            'pressure' => [800.0, 1100.0],
+            'wind_speed' => [0.0, 100.0],
+            'wind_dir' => [0.0, 359.0],
+            'rain_counter' => [0.0, PHP_FLOAT_MAX],
+            'solar_rad' => [0.0, 1400.0],
         ];
     }
 
-    public static function rangeErrors(array $sensors): array
+    private function upsertHealth(string $deviceId, ?string $fw, array $lastItem): void
     {
-        $flags = [];
+        $battery = $lastItem['battery_v'];
+        $rssi = $lastItem['rssi'];
 
-        foreach (self::sensorBounds() as $name => [$lo, $hi]) {
-            $value = $sensors[$name];
-            if (! is_finite($value) || $value < $lo || $value > $hi) {
-                $flags[] = "out_of_range:{$name}";
-            }
-        }
-
-        if ($sensors['rain_counter'] < 0) {
-            $flags[] = 'out_of_range:rain_counter';
-        }
-
-        return $flags;
+        DB::update(
+            'INSERT INTO device_health (
+                device_id, battery_voltage, rssi, firmware_version,
+                last_heartbeat_at, last_seq, updated_at
+             ) VALUES (?, ?, ?, ?, now(), ?, now())
+             ON CONFLICT (device_id) DO UPDATE SET
+                battery_voltage = COALESCE(excluded.battery_voltage, device_health.battery_voltage),
+                rssi = COALESCE(excluded.rssi, device_health.rssi),
+                firmware_version = COALESCE(excluded.firmware_version, device_health.firmware_version),
+                last_heartbeat_at = excluded.last_heartbeat_at,
+                last_seq = excluded.last_seq,
+                updated_at = now()',
+            [$deviceId, $battery, $rssi, $fw, $lastItem['seq']],
+        );
     }
 
-    public static function qualityScoreFor(array $flags): int
+    private function touchDevice(string $deviceId, ?string $fw, Carbon $ts): void
     {
-        $outOfRange = 0;
-        foreach ($flags as $flag) {
-            if (str_starts_with($flag, 'out_of_range')) {
-                $outOfRange++;
-            }
-        }
-
-        $total = 6;
-        $valid = $total - $outOfRange;
-
-        return max(0, (int) (100 * $valid / $total));
+        DB::update(
+            'UPDATE devices SET
+                last_seen_at = now(),
+                last_device_time = GREATEST(COALESCE(last_device_time, ?), ?),
+                firmware_version = COALESCE(?, firmware_version)
+             WHERE id = ?',
+            [$ts->toIso8601String(), $ts->toIso8601String(), $fw, $deviceId],
+        );
     }
 
-    public static function calibrationMap(mixed $raw): array
+    private static function rowCount(array $items): int
     {
-        if (is_string($raw)) {
-            $raw = json_decode($raw, true);
+        $count = 0;
+        foreach ($items as $item) {
+            $count += count($item['readings']);
         }
 
-        return is_array($raw) ? $raw : [];
-    }
-
-    /**
-     * value = raw * gain + offset (per device config). rain_counter stays raw.
-     */
-    public static function applyCalibration(array $sensors, array $calibration): array
-    {
-        $out = $sensors;
-
-        foreach (['temperature_c', 'humidity_pct', 'pressure_hpa', 'windspeed_ms', 'wind_direction_deg'] as $name) {
-            $coeffs = $calibration[$name] ?? null;
-            $gain = is_array($coeffs) ? ($coeffs['gain'] ?? 1.0) : 1.0;
-            $offset = is_array($coeffs) ? ($coeffs['offset'] ?? 0.0) : 0.0;
-            $out[$name] = $sensors[$name] * $gain + $offset;
-        }
-
-        return $out;
-    }
-
-    /**
-     * Computes a rain delta in counter units (interpreted as millimetres),
-     * handling first readings, counter resets and out-of-order arrivals.
-     */
-    public static function rainDelta(?object $previous, Carbon $takenAt, int $current): array
-    {
-        $flags = [];
-
-        if ($previous === null) {
-            $flags[] = 'rain_initial';
-
-            return [0.0, $flags];
-        }
-
-        $prevTakenAt = $previous->taken_at ? Carbon::parse($previous->taken_at) : null;
-        $prevCounter = $previous->rain_counter !== null ? (int) $previous->rain_counter : null;
-
-        if ($prevTakenAt === null || $prevCounter === null) {
-            $flags[] = 'rain_initial';
-
-            return [0.0, $flags];
-        }
-
-        if ($takenAt->lte($prevTakenAt)) {
-            $flags[] = 'rain_out_of_order';
-        }
-
-        if ($current < $prevCounter) {
-            $flags[] = 'rain_reset';
-
-            return [0.0, $flags];
-        }
-
-        return [(float) ($current - $prevCounter), $flags];
-    }
-
-    public static function truthy(mixed $value): bool
-    {
-        if (is_bool($value)) {
-            return $value;
-        }
-
-        return filter_var($value, FILTER_VALIDATE_BOOLEAN);
+        return $count;
     }
 }

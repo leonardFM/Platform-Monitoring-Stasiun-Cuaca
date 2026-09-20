@@ -21,6 +21,7 @@ return new class extends Migration
             $table->string('firmware_version', 50)->nullable();
             $table->timestampTz('last_heartbeat_at')->nullable();
             $table->bigInteger('uptime_seconds')->nullable();
+            $table->bigInteger('last_seq')->nullable();
             $table->timestampTz('updated_at')->useCurrent();
         });
     }

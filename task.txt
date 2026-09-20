@@ -1,6 +1,6 @@
 # TASK LIST — Penyelesaian Tes Teknis Luwes Inovasi Mandiri
 
-Status keseluruhan: ~50% selesai (Fase 0 tuntas).
+Status keseluruhan: ~58% selesai (Fase 0 tuntas, Fase 1 tuntas).
 Prioritas: P0 (blokir total) > P1 (wajib spek) > P2 (bonus/lanjutan).
 
 =====================================================================
@@ -44,25 +44,32 @@ battery_v, rssi, readings:[{s,v}]. Kode sensor: temp_air, humidity, pressure,
 wind_speed, wind_dir, rain_counter, solar_rad. 1 tip rain = 0.2 mm.
 seq reset 0 saat restart; wind_dir 0-359; sensor error TIDAK ikut dikirim.
 
-- [ ] [P0] Tulis ulang JsonParser agar menerima & menormalisasi payload F.1
+- [x] [P0] Tulis ulang JsonParser agar menerima & menormalisasi payload F.1
       (single, batch, heartbeat) — buang kontrak `message_id/taken_at/sensors`.
 - [x] [P0] Pindahkan autentikasi ingest dari `devices.api_key` ke
       `device_credentials` (AuthenticateApiKey pakai tabel baru).
       (Selesai lebih awal di Fase 0.)
-- [ ] [P0] Rewrite pemrosesan (TelemetryProcessor) ke skema narrow:
+- [x] [P0] Rewrite pemrosesan (TelemetryProcessor) ke skema narrow:
       insert 1 row per sensor ke `sensor_readings` (reading_key idempoten =
       device_id|device_time|sensor_id|seq), pakai `corrected_value` hasil
       kalibrasi periode `sensor_calibrations`.
-- [ ] [P0] Konversi rain: delta counter * 0.2 mm; tangani reset (turun) = 0 mm
-      + flag `rain_reset`; first reading = 0 mm + flag `rain_initial`.
-- [ ] [P0] Pastikan sensor yang TIDAK ada di `readings[]` dianggap tidak ada
+- [x] [P0] Konversi rain: delta counter * 0.2 mm; tangani reset (turun) = 0 mm
+      + flag `RAIN_RESET`; first reading = 0 mm + flag `RAIN_INITIAL`.
+- [x] [P0] Pastikan sensor yang TIDAK ada di `readings[]` dianggap tidak ada
       (null), bukan error (tidak semua sensor error ikut dikirim).
-- [ ] [P0] Simpan metadata health dari setiap payload: battery_v, rssi, fw,
+- [x] [P0] Simpan metadata health dari setiap payload: battery_v, rssi, fw,
       seq -> update `device_health` + `devices.last_device_time`.
-- [ ] [P0] Idempotensi via `ON CONFLICT (reading_key, device_time) DO NOTHING`;
+- [x] [P0] Idempotensi via `ON CONFLICT (reading_key, device_time) DO NOTHING`;
       hapus idempotensi lama berbasis message_id.
-- [ ] [P1] Batasi batch = 100 (chunk split ke beberapa batch jika >100 di
+- [x] [P1] Batasi batch = 100 (chunk split ke beberapa batch jika >100 di
       payload — spek F.3 #8 kasus batch 500).
+- [x] [P0] Verifikasi E2E (curl + DB): single, duplikat (resend), batch 8+2 dup,
+      batch 500 (3500 row), heartbeat, CLOCK_DRIFT (ts+2j), LATE (ts-8hari),
+      OUT_OF_RANGE (humidity 150), SENSOR_ERROR (-999), RAIN_RESET (counter
+      turun), device_id mismatch 400, tanpa key 401, payload invalid 400.
+      (F.3 kasus 1-8 tertangani di pipeline & respons validated.)
+- [x] [P0] Hapus ReadingValidator.php (validasi struktural di JsonParser;
+      range jadi quality flag OUT_OF_RANGE; -999 jadi SENSOR_ERROR).
 
 =====================================================================
 ## FASE 2 — Backend: API yang belum ada (P1/WAJIB, Bagian E)

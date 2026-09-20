@@ -220,6 +220,7 @@ class DemoDataSeeder extends Seeder
 
                 // Rain counter: increment secara acak (tip = 0.2mm)
                 if ($typeCode === 'rain_counter') {
+                    $rainPrev = $rainCounters[$sensorId] ?? null;
                     $rainCounters[$sensorId] = ($rainCounters[$sensorId] ?? 0) + mt_rand(0, 1);
                     $raw = $rainCounters[$sensorId];
                 }
@@ -233,7 +234,20 @@ class DemoDataSeeder extends Seeder
                 // Quality flag: 95% GOOD
                 $quality = (mt_rand(1, 100) <= 95) ? 'GOOD' : 'OUT_OF_RANGE';
 
-                $rows[] = [$deviceId, $sensorId, $deviceTime, $serverTime, $seq++, $raw, $raw, $quality];
+                // Sensor error code yang dikirim firmware kadang -999
+                // (bukan bagian dari data historis demo ini).
+
+                $corrected = $raw;
+                $flag = $quality;
+
+                // Rain: delta counter * 0.2 mm (sama dengan pipeline live).
+                if ($typeCode === 'rain_counter') {
+                    $delta = (float) (($rainPrev === null || $raw < $rainPrev) ? 0 : $raw - $rainPrev);
+                    $corrected = round($delta * 0.2, 4);
+                    $flag = $rainPrev === null ? 'RAIN_INITIAL' : 'GOOD';
+                }
+
+                $rows[] = [$deviceId, $sensorId, $deviceTime, $serverTime, $seq++, $raw, $corrected, $flag];
 
                 if (count($rows) >= 1000) {
                     $flush();
