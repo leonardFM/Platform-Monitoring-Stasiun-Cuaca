@@ -19,7 +19,7 @@ return new class extends Migration
             $table->decimal('min_value')->nullable();
             $table->decimal('max_value')->nullable();
             $table->decimal('avg_value')->nullable();
-            $table->decimal('sum_value')->nullable();
+            $table->decimal('sum_value', 16, 4)->nullable();
             $table->integer('sample_count');
             $table->integer('quality_count');
             $table->timestampTz('created_at')->useCurrent();

@@ -9,14 +9,16 @@ fi
 
 chown -R www-data:www-data storage bootstrap/cache
 
-php artisan optimize || true
-php artisan docs:fresh --no-interaction || php artisan l5-swagger:generate || true
-
 case "$1" in
     backend)
+        php artisan migrate --force --seed --no-interaction
+        php artisan optimize || true
+        php artisan docs:fresh --no-interaction || php artisan l5-swagger:generate || true
         exec supervisord -c /etc/supervisor-backend.conf
         ;;
     worker)
+        php artisan optimize || true
+        php artisan docs:fresh --no-interaction || php artisan l5-swagger:generate || true
         exec supervisord -c /etc/supervisor-worker.conf
         ;;
     *)

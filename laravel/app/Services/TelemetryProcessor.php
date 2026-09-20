@@ -121,7 +121,7 @@ class TelemetryProcessor
                 rain_delta_mm, quality_flags, quality_score
             )
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT (device_id, message_id) DO NOTHING",
+            ON CONFLICT (device_id, message_id, taken_at) DO NOTHING",
             [
                 $deviceId,
                 $messageId,

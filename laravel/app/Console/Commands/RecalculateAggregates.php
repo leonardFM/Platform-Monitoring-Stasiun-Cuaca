@@ -15,7 +15,7 @@ class RecalculateAggregates extends Command
     {
         $recalculator->recalculate();
 
-        $this->info('station aggregates recalculated');
+        $this->info('reading aggregates recalculated');
 
         return self::SUCCESS;
     }

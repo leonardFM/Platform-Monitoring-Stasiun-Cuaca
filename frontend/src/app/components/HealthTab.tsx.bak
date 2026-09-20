@@ -1,0 +1,309 @@
+"use client";
+
+import { useState, useEffect } from "react";
+import { api } from "@/app/lib/api";
+import { DeviceHealth, StaleDevicesResponse, StaleDevice, DeviceInfo } from "@/app/types";
+import { fmtTime, fmt } from "@/app/utils";
+import { Modal } from "./Modal";
+
+interface HealthTabProps {
+  devices: DeviceInfo[];
+}
+
+export function HealthTab({ devices }: HealthTabProps) {
+  const [health, setHealth] = useState<Record<string, DeviceHealth>>({});
+  const [staleDevices, setStaleDevices] = useState<StaleDevice[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [staleLoading, setStaleLoading] = useState(true);
+  const [threshold, setThreshold] = useState(15);
+  const [selectedDevice, setSelectedDevice] = useState<DeviceInfo | null>(null);
+  const [heartbeatData, setHeartbeatData] = useState({
+    battery_voltage: "",
+    rssi: "",
+    firmware_version: "",
+    uptime_seconds: "",
+  });
+
+  const fetchAllHealth = async () => {
+    setLoading(true);
+    try {
+      const healthMap: Record<string, DeviceHealth> = {};
+      for (const device of devices) {
+        try {
+          const h = await api.health.get(device.id);
+          healthMap[device.id] = h;
+        } catch {
+          healthMap[device.id] = { device_id: device.id } as DeviceHealth;
+        }
+      }
+      setHealth(healthMap);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const fetchStale = async () => {
+    setStaleLoading(true);
+    try {
+      const res = await api.health.stale(threshold);
+      setStaleDevices(res.data);
+    } finally {
+      setStaleLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchAllHealth();
+    fetchStale();
+  }, [devices, threshold]);
+
+  const sendHeartbeat = async (deviceId: string) => {
+    try {
+      const data = {
+        battery_voltage: heartbeatData.battery_voltage ? Number(heartbeatData.battery_voltage) : undefined,
+        rssi: heartbeatData.rssi ? Number(heartbeatData.rssi) : undefined,
+        firmware_version: heartbeatData.firmware_version || undefined,
+        uptime_seconds: heartbeatData.uptime_seconds ? Number(heartbeatData.uptime_seconds) : undefined,
+      };
+      await api.health.heartbeat(deviceId, data);
+      alert("Heartbeat sent successfully!");
+      fetchAllHealth();
+    } catch (err) {
+      alert(err instanceof Error ? err.message : "Failed to send heartbeat");
+    }
+  };
+
+  const getStaleClass = (device: StaleDevice) => {
+    if (device.stale_minutes === null) return "badge good";
+    if (device.stale_minutes > 60) return "badge bad";
+    if (device.stale_minutes > 15) return "badge conflict";
+    return "badge good";
+  };
+
+  const getHealthBadge = (h: DeviceHealth) => {
+    if (h.is_stale) return "badge bad";
+    if (h.battery_voltage !== null && h.battery_voltage < 3.3) return "badge conflict";
+    if (h.rssi !== null && h.rssi < -90) return "badge conflict";
+    return "badge good";
+  };
+
+  return (
+    <div>
+      <div className="flex justify-between items-center mb-4">
+        <h2>Device Health & Monitoring</h2>
+        <div className="flex gap-2 items-center">
+          <label className="text-sm text-muted">Stale threshold (min):</label>
+          <select
+            value={threshold}
+            onChange={(e) => setThreshold(Number(e.target.value))}
+            className="input-sm"
+          >
+            {[5, 10, 15, 30, 60].map((m) => <option key={m} value={m}>{m} min</option>)}
+          </select>
+          <button className="btn-secondary btn-sm" onClick={fetchStale} disabled={staleLoading}>
+            {staleLoading ? "Refreshing…" : "Refresh Stale"}
+          </button>
+        </div>
+      </div>
+
+      {loading && <div className="empty">Loading health data…</div>}
+
+      <div className="grid" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(350px, 1fr))", marginBottom: 24 }}>
+        <div className="card">
+          <h3 className="panel-title">Device Health</h3>
+          {devices.length === 0 ? (
+            <div className="empty">No devices</div>
+          ) : (
+            <table style={{ width: "100%", fontSize: "12px" }}>
+              <thead>
+                <tr>
+                  <th style={{ textAlign: "left" }}>Device</th>
+                  <th style={{ textAlign: "left" }}>Status</th>
+                  <th style={{ textAlign: "left" }}>Battery</th>
+                  <th style={{ textAlign: "left" }}>RSSI</th>
+                  <th style={{ textAlign: "left" }}>Last Heartbeat</th>
+                  <th style={{ textAlign: "left" }}>Action</th>
+                </tr>
+              </thead>
+              <tbody>
+                {devices.map((d) => {
+                  const h = health[d.id];
+                  const lastHb = h?.last_heartbeat_at;
+                  const stale = h?.is_stale || (h?.stale_minutes !== null && h.stale_minutes > 15);
+                  return (
+                    <tr key={d.id} style={{ opacity: stale ? 0.7 : 1 }}>
+                      <td>
+                        <div style={{ fontWeight: 600 }}>{d.name}</div>
+                        <div className="sub">{d.device_code}</div>
+                      </td>
+                      <td>
+                        <span className={h ? getHealthBadge(h) : "badge good"}>
+                          {h?.is_stale ? "Stale" : "Healthy"}
+                        </span>
+                      </td>
+                      <td>
+                        {h?.battery_voltage !== null ? `${fmt(h.battery_voltage)}V` : "—"}
+                        {h?.battery_voltage !== null && h.battery_voltage < 3.3 && (
+                          <span className="badge bad" style={{ marginLeft: 4 }}>Low</span>
+                        )}
+                      </td>
+                      <td>
+                        {h?.rssi !== null ? `${fmt(h.rssi)} dBm` : "—"}
+                        {h?.rssi !== null && h.rssi < -90 && (
+                          <span className="badge conflict" style={{ marginLeft: 4 }}>Weak</span>
+                        )}
+                      </td>
+                      <td>
+                        {lastHb ? fmtTime(lastHb) : "Never"}
+                        {h?.stale_minutes !== null && (
+                          <div className="badge" style={{ background: stale ? "#f8717120" : "#4ade8020", color: stale ? "#f87171" : "#4ade80", marginTop: 2 }}>
+                            {h.stale_minutes} min ago
+                          </div>
+                        )}
+                      </td>
+                      <td>
+                        <button
+                          className="btn-secondary btn-sm"
+                          onClick={() => setHeartbeatData({
+                            battery_voltage: "",
+                            rssi: "",
+                            firmware_version: d.firmware_version,
+                            uptime_seconds: "",
+                          })}
+                        >
+                          Send Heartbeat
+                        </button>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+
+          <div className="card">
+            <h3 className="panel-title">Stale Devices (> {threshold} min)</h3>
+            {staleLoading ? (
+              <div className="empty">Loading…</div>
+            ) : staleDevices.length === 0 ? (
+              <div className="empty" style={{ color: "var(--ok)" }}>
+                All devices reporting within threshold ✓
+              </div>
+            ) : (
+              <table style={{ width: "100%", fontSize: "12px" }}>
+                <thead>
+                  <tr>
+                    <th style={{ textAlign: "left" }}>Device</th>
+                    <th style={{ textAlign: "left" }}>Status</th>
+                    <th style={{ textAlign: "left" }}>Last Seen</th>
+                    <th style={{ textAlign: "left" }}>Stale For</th>
+                    <th style={{ textAlign: "left" }}>Battery</th>
+                    <th style={{ textAlign: "left" }}>RSSI</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {staleDevices.map((d) => (
+                    <tr key={d.id} style={{ opacity: 0.7 }}>
+                      <td>
+                        <div style={{ fontWeight: 600 }}>{d.name}</div>
+                        <div className="sub">{d.device_code}</div>
+                      </td>
+                      <td>
+                        <span className={`badge ${statusBadge[d.status]}`}>{d.status}</span>
+                      </td>
+                      <td>{d.last_seen_at ? fmtTime(d.last_seen_at) : "Never"}</td>
+                      <td>
+                        <span className={getStaleClass(d)}>
+                          {d.stale_minutes !== null ? `${d.stale_minutes} min` : "Unknown"}
+                        </span>
+                      </td>
+                      <td>{d.battery_voltage !== null ? `${fmt(d.battery_voltage)}V` : "—"}</td>
+                      <td>{d.rssi !== null ? `${fmt(d.rssi)} dBm` : "—"}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </div>
+        </div>
+
+        {devices.map((d) => {
+          const h = health[d.id];
+          return (
+            <Modal
+              isOpen={selectedDevice?.id === d.id}
+              onClose={() => setSelectedDevice(null)}
+              title={`Heartbeat: ${d.name}`}
+            >
+              <div className="p-4 space-y-3" style={{ minWidth: 320 }}>
+                <div>
+                  <label className="block text-xs text-muted mb-1">Battery Voltage (V)</label>
+                  <input
+                    className="w-full p-2 bg-bg border border-border rounded"
+                    type="number"
+                    step="0.01"
+                    value={heartbeatData.battery_voltage}
+                    onChange={(e) => setHeartbeatData({ ...heartbeatData, battery_voltage: e.target.value })}
+                    placeholder="e.g. 3.7"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs text-muted mb-1">RSSI (dBm)</label>
+                  <input
+                    className="w-full p-2 bg-bg border border-border rounded"
+                    type="number"
+                    value={heartbeatData.rssi}
+                    onChange={(e) => setHeartbeatData({ ...heartbeatData, rssi: e.target.value })}
+                    placeholder="e.g. -75"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs text-muted mb-1">Firmware Version</label>
+                  <input
+                    className="w-full p-2 bg-bg border border-border rounded"
+                    value={heartbeatData.firmware_version}
+                    onChange={(e) => setHeartbeatData({ ...heartbeatData, firmware_version: e.target.value })}
+                    placeholder="e.g. 1.0.1"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs text-muted mb-1">Uptime (seconds)</label>
+                  <input
+                    className="w-full p-2 bg-bg border border-border rounded"
+                    type="number"
+                    value={heartbeatData.uptime_seconds}
+                    onChange={(e) => setHeartbeatData({ ...heartbeatData, uptime_seconds: e.target.value })}
+                    placeholder="e.g. 86400"
+                  />
+                </div>
+                <div className="flex gap-2">
+                  <button className="btn-primary flex-1" onClick={() => sendHeartbeat(d.id)}>
+                    Send Heartbeat
+                  </button>
+                  <button className="btn-secondary flex-1" onClick={() => setSelectedDevice(null)}>
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            </Modal>
+          )
+        })}
+      </div>
+    </div>
+  );
+}
+
+function statusBadge(status: string): string {
+  switch (status) {
+    case "active":
+      return "good";
+    case "maintenance":
+      return "conflict";
+    case "provisioned":
+      return "conflict";
+    case "decommissioned":
+      return "bad";
+    default:
+      return "conflict";
+  }
+}

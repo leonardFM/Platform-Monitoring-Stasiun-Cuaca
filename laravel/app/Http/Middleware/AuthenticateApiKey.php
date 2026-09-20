@@ -23,13 +23,27 @@ class AuthenticateApiKey
         }
 
         $device = $this->db->selectOne(
-            'SELECT id, name, calibration FROM devices WHERE api_key = ? AND is_active = TRUE',
-            [$key],
+            'SELECT d.id, d.device_code, d.name, d.status, d.firmware_version,
+                    c.id AS credential_id, c.api_key, c.secret_hash
+             FROM device_credentials c
+             JOIN devices d ON d.id = c.device_id
+             WHERE c.api_key = ?
+               AND c.revoked_at IS NULL
+               AND d.status = ?
+               AND d.deleted_at IS NULL
+             ORDER BY c.created_at DESC
+             LIMIT 1',
+            [$key, 'active'],
         );
 
         if (! $device) {
             throw ApiException::unauthorized('invalid or inactive API key');
         }
+
+        $this->db->update(
+            'UPDATE device_credentials SET last_used_at = now() WHERE id = ?',
+            [$device->credential_id],
+        );
 
         $request->attributes->set('device', $device);
 

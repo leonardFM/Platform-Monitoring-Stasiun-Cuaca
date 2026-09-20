@@ -5,68 +5,62 @@ namespace App\Services;
 use Illuminate\Support\Facades\DB;
 
 /**
- * Recomputation pass: rebuilds the most recent hour/day aggregates directly
- * from the base telemetry_readings, self-healing any incremental drift.
- * Mirrors the original worker's 300s recalc loop.
+ * Recomputation pass: rebuilds the most recent hour/day reading_aggregates
+ * directly from base sensor_readings, self-healing any incremental drift.
+ * Mirrors the scheduler's 300s recalc loop (routes/console.php).
  */
 class AggregateRecalculator
 {
     public function recalculate(): void
     {
-        $this->recalculateGranularity('hour', '48 hours');
-        $this->recalculateGranularity('day', '2 days');
+        $this->recalculateGranularity('1h', '48 hours');
+        $this->recalculateGranularity('1d', '4 days');
     }
 
     private function recalculateGranularity(string $granularity, string $window): void
     {
-        $granularity = match ($granularity) {
-            'hour' => 'hour',
-            'day' => 'day',
-            default => throw new \InvalidArgumentException("unsupported granularity: {$granularity}"),
+        if (! in_array($granularity, ['1m', '1h', '1d'], true)) {
+            throw new \InvalidArgumentException("unsupported granularity: {$granularity}");
+        }
+
+        // Granularity di-allowlist di atas sehingga aman di-interpolasi;
+        // bind param tidak bisa dipakai di date_trunc(...) pada GROUP BY.
+        $unit = match ($granularity) {
+            '1m' => 'minute',
+            '1h' => 'hour',
+            '1d' => 'day',
         };
+        $bucket = "date_trunc('{$unit}', s.device_time)";
 
         DB::update(
-            "INSERT INTO station_aggregates (
-                device_id, granularity, period_start, count,
-                temperature_avg, temperature_min, temperature_max,
-                humidity_avg, humidity_min, humidity_max,
-                pressure_avg, pressure_min, pressure_max,
-                windspeed_avg, windspeed_min, windspeed_max,
-                wind_direction_avg, rain_total_mm
+            "INSERT INTO reading_aggregates (
+                sensor_id, \"interval\", bucket_start,
+                min_value, max_value, avg_value, sum_value,
+                sample_count, quality_count
             )
             SELECT
-                s.device_id,
-                '{$granularity}',
-                date_trunc('{$granularity}', s.taken_at),
-                COUNT(*)::BIGINT,
-                AVG(s.temperature_c), MIN(s.temperature_c), MAX(s.temperature_c),
-                AVG(s.humidity_pct), MIN(s.humidity_pct), MAX(s.humidity_pct),
-                AVG(s.pressure_hpa), MIN(s.pressure_hpa), MAX(s.pressure_hpa),
-                AVG(s.windspeed_ms), MIN(s.windspeed_ms), MAX(s.windspeed_ms),
-                AVG(s.wind_direction_deg),
-                SUM(s.rain_delta_mm)
-            FROM telemetry_readings s
-            WHERE s.taken_at >= now() - ?::interval
-            GROUP BY s.device_id, date_trunc('{$granularity}', s.taken_at)
-            ON CONFLICT (device_id, granularity, period_start) DO UPDATE SET
-                count = excluded.count,
-                temperature_avg = excluded.temperature_avg,
-                temperature_min = excluded.temperature_min,
-                temperature_max = excluded.temperature_max,
-                humidity_avg = excluded.humidity_avg,
-                humidity_min = excluded.humidity_min,
-                humidity_max = excluded.humidity_max,
-                pressure_avg = excluded.pressure_avg,
-                pressure_min = excluded.pressure_min,
-                pressure_max = excluded.pressure_max,
-                windspeed_avg = excluded.windspeed_avg,
-                windspeed_min = excluded.windspeed_min,
-                windspeed_max = excluded.windspeed_max,
-                wind_direction_avg = excluded.wind_direction_avg,
-                rain_total_mm = excluded.rain_total_mm",
-            [
-                $window,
-            ],
+                s.sensor_id,
+                ?::VARCHAR,
+                {$bucket},
+                MIN(COALESCE(s.corrected_value, s.raw_value)),
+                MAX(COALESCE(s.corrected_value, s.raw_value)),
+                AVG(COALESCE(s.corrected_value, s.raw_value)),
+                SUM(COALESCE(s.corrected_value, s.raw_value)),
+                COUNT(*)::INTEGER,
+                COUNT(*) FILTER (WHERE s.quality_flag = 'GOOD')::INTEGER
+            FROM sensor_readings s
+            JOIN sensors sen ON sen.id = s.sensor_id
+            JOIN sensor_types st ON st.id = sen.sensor_type_id AND st.code <> 'rain_counter'
+            WHERE s.device_time >= now() - ?::INTERVAL
+            GROUP BY s.sensor_id, {$bucket}
+            ON CONFLICT (sensor_id, \"interval\", bucket_start) DO UPDATE SET
+                min_value = excluded.min_value,
+                max_value = excluded.max_value,
+                avg_value = excluded.avg_value,
+                sum_value = excluded.sum_value,
+                sample_count = excluded.sample_count,
+                quality_count = excluded.quality_count",
+            [$granularity, $window],
         );
     }
 }

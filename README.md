@@ -137,7 +137,6 @@ and acks only after a successful commit.
 
 ```
 laravel/    Laravel app (API, queue job/worker pipeline, Swagger docs, Docker image)
-db/init/    Postgres schema + demo device seed (entrypoint-initdb.d)
 frontend/   Next.js App Router dashboard (server-side proxy to backend)
 demo/       curl-based device simulator
 ```

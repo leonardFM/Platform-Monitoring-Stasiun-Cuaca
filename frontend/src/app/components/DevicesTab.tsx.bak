@@ -1,0 +1,393 @@
+"use client";
+
+import { useState } from "react";
+import { api } from "@/app/lib/api";
+import { DeviceInfo, Location, DeviceCredential, DeviceStatusHistory } from "@/app/types";
+import { fmtTime, fmt } from "@/app/utils";
+import { Modal } from "./Modal";
+
+interface DevicesTabProps {
+  onRefresh: () => void;
+}
+
+export function DevicesTab({ onRefresh }: DevicesTabProps) {
+  const [devices, setDevices] = useState<DeviceInfo[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [selectedDevice, setSelectedDevice] = useState<DeviceInfo | null>(null);
+  const [showCreateModal, setShowCreateModal] = useState(false);
+  const [credentials, setCredentials] = useState<DeviceCredential[]>([]);
+  const [statusHistory, setStatusHistory] = useState<DeviceStatusHistory[]>([]);
+  const [showCredentialsModal, setShowCredentialsModal] = useState(false);
+  const [newCredentials, setNewCredentials] = useState<{ api_key: string; secret: string } | null>(null);
+
+  const fetchDevices = async () => {
+    setLoading(true);
+    try {
+      const res = await api.devices.list();
+      setDevices(res.data);
+      setError(null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to load devices");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const fetchCredentials = async (deviceId: string) => {
+    try {
+      const res = await api.devices.credentials.list(deviceId);
+      setCredentials(res.data);
+    } catch (err) {
+      console.error("Failed to load credentials:", err);
+    }
+  };
+
+  const fetchStatusHistory = async (deviceId: string) => {
+    try {
+      const res = await api.devices.status.history(deviceId);
+      setStatusHistory(res.data);
+    } catch (err) {
+      console.error("Failed to load status history:", err);
+    }
+  };
+
+  const handleSelectDevice = (device: DeviceInfo) => {
+    setSelectedDevice(device);
+    fetchCredentials(device.id);
+    fetchStatusHistory(device.id);
+  };
+
+  const handleCreateDevice = async (data: any) => {
+    try {
+      await api.devices.create(data);
+      setShowCreateModal(false);
+      await fetchDevices();
+    } catch (err) {
+      alert(err instanceof Error ? err.message : "Failed to create device");
+    }
+  };
+
+  const handleStatusChange = async (deviceId: string, status: string, reason?: string) => {
+    try {
+      await api.devices.status.update(deviceId, status, reason);
+      await fetchDevices();
+      if (selectedDevice?.id === deviceId) fetchStatusHistory(deviceId);
+    } catch (err) {
+      alert(err instanceof Error ? err.message : "Failed to update status");
+    }
+  };
+
+  const handleCreateCredential = async (deviceId: string) => {
+    try {
+      const res = await api.devices.credentials.create(deviceId);
+      setNewCredentials(res);
+      setShowCredentialsModal(true);
+      await fetchCredentials(deviceId);
+    } catch (err) {
+      alert(err instanceof Error ? err.message : "Failed to create credential");
+    }
+  };
+
+  const handleRotateCredential = async (deviceId: string) => {
+    try {
+      const res = await api.devices.credentials.rotate(deviceId);
+      setNewCredentials(res);
+      setShowCredentialsModal(true);
+      await fetchCredentials(deviceId);
+    } catch (err) {
+      alert(err instanceof Error ? err.message : "Failed to rotate credential");
+    }
+  };
+
+  const handleRevokeCredential = async (deviceId: string, credentialId: string) => {
+    if (!confirm("Revoke this credential?")) return;
+    try {
+      await api.devices.credentials.revoke(deviceId, credentialId);
+      await fetchCredentials(deviceId);
+    } catch (err) {
+      alert(err instanceof Error ? err.message : "Failed to revoke credential");
+    }
+  };
+
+  const handleDeleteDevice = async (deviceId: string) => {
+    if (!confirm("Delete this device? Only decommissioned devices can be deleted.")) return;
+    try {
+      await api.devices.delete(deviceId);
+      setSelectedDevice(null);
+      await fetchDevices();
+    } catch (err) {
+      alert(err instanceof Error ? err.message : "Failed to delete device");
+    }
+  };
+
+  const statusColors: Record<string, string> = {
+    active: "#4ade80",
+    maintenance: "#facc15",
+    provisioned: "#38bdf8",
+    decommissioned: "#f87171",
+  };
+
+  const statusBadge: Record<string, string> = {
+    active: "good",
+    maintenance: "conflict",
+    provisioned: "conflict",
+    decommissioned: "bad",
+  };
+
+  if (loading) return <div className="empty">Loading devices…</div>;
+
+  return (
+    <div className="flex gap-4" style={{ minHeight: 500 }}>
+      <div className="card" style={{ width: 320, flexShrink: 0 }}>
+        <h3 className="panel-title">Devices</h3>
+        <button className="btn-primary w-full mb-3" onClick={() => setShowCreateModal(true)}>
+          + Add Device
+        </button>
+        <div className="device-list" style={{ maxHeight: 500, overflow: "auto" }}>
+          {devices.length === 0 ? (
+            <div className="empty">No devices yet</div>
+          ) : (
+            devices.map((d) => (
+              <div
+                key={d.id}
+                className="device-item"
+                style={{
+                  padding: "12px",
+                  borderBottom: "1px solid var(--border)",
+                  cursor: "pointer",
+                  background: selectedDevice?.id === d.id ? "var(--panel-2)" : "transparent",
+                }}
+                onClick={() => handleSelectDevice(d)}
+              >
+                <div className="flex justify-between items-center">
+                  <span style={{ fontWeight: 600 }}>{d.name}</span>
+                  <span className={`badge ${statusBadge[d.status]}`}>{d.status}</span>
+                </div>
+                <div className="sub" style={{ marginTop: 4 }}>
+                  {d.device_code} · {d.location?.name}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      <div className="flex-1" style={{ minWidth: 0 }}>
+        {selectedDevice ? (
+          <div className="grid" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(300px, 1fr))" }}>
+            <div className="card">
+              <h3>{selectedDevice.name}</h3>
+              <div className="sub">{selectedDevice.device_code}</div>
+              <div className="sub">{selectedDevice.location?.name} · {selectedDevice.location?.country}</div>
+              <div className="sub">
+                Lat: {fmt(selectedDevice.location?.latitude)} Lon: {fmt(selectedDevice.location?.longitude)}
+                {selectedDevice.location?.altitude !== null && ` · Alt: ${fmt(selectedDevice.location?.altitude)}m`}
+              </div>
+              <div className="sub" style={{ marginTop: 8 }}>
+                <span className="badge" style={{ backgroundColor: statusColors[selectedDevice.status] + "20", color: statusColors[selectedDevice.status] }}>
+                  {selectedDevice.status}
+                </span>
+                <span style={{ marginLeft: 8 }}>FW: {selectedDevice.firmware_version}</span>
+                <span style={{ marginLeft: 8 }}>Rain: {fmt(selectedDevice.rain_today_mm, 2)}mm</span>
+              </div>
+              <div style={{ marginTop: 12, display: "flex", gap: 8, flexWrap: "wrap" }}>
+                {selectedDevice.status !== "decommissioned" && (
+                  <button
+                    className="btn-secondary btn-sm"
+                    onClick={() => handleStatusChange(
+                      selectedDevice!.id,
+                      selectedDevice!.status === "active" ? "maintenance" : "active",
+                      selectedDevice!.status === "active" ? "Scheduled maintenance" : "Back online"
+                    )}
+                  >
+                    {selectedDevice.status === "active" ? "Set Maintenance" : "Set Active"}
+                  </button>
+                )}
+                {selectedDevice.status === "provisioned" && (
+                  <button
+                    className="btn-secondary btn-sm"
+                    onClick={() => handleStatusChange(selectedDevice!.id, "active", "Deployed to field")}
+                  >
+                    Activate
+                  </button>
+                )}
+                {selectedDevice.status !== "decommissioned" && (
+                  <button
+                    className="btn-secondary btn-sm"
+                    style={{ background: "#f8717120", color: "#f87171" }}
+                    onClick={() => handleStatusChange(selectedDevice!.id, "decommissioned", "Decommissioned")}
+                  >
+                    Decommission
+                  </button>
+                )}
+              </div>
+            </div>
+
+            <div className="card">
+              <div className="flex justify-between items-center mb-3">
+                <h3>Credentials</h3>
+                <button className="btn-secondary btn-sm" onClick={() => handleCreateCredential(selectedDevice!.id)}>
+                  + New Credential
+                </button>
+              </div>
+              {credentials.length === 0 ? (
+                <div className="empty">No credentials</div>
+              ) : (
+                <table style={{ width: "100%", fontSize: "12px" }}>
+                  <thead>
+                    <tr>
+                      <th style={{ textAlign: "left" }}>API Key</th>
+                      <th style={{ textAlign: "left" }}>Last Used</th>
+                      <th style={{ textAlign: "left" }}>Status</th>
+                      <th></th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {credentials.map((c) => (
+                      <tr key={c.id}>
+                        <td style={{ fontFamily: "monospace", fontSize: "11px" }}>{c.api_key}</td>
+                        <td>{c.last_used_at ? fmtTime(c.last_used_at) : "Never"}</td>
+                        <td>
+                          <span className={c.revoked_at ? "badge bad" : "badge good"}>
+                            {c.revoked_at ? "Revoked" : "Active"}
+                          </span>
+                        </td>
+                        <td>
+                          {!c.revoked_at && (
+                            <button className="btn-secondary btn-sm" onClick={() => handleRevokeCredential(selectedDevice!.id, c.id)}>
+                              Revoke
+                            </button>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+              <button className="btn-secondary btn-sm mt-2 w-full" onClick={() => handleRotateCredential(selectedDevice!.id)}>
+                Rotate All Credentials
+              </button>
+            </div>
+
+            <div className="card">
+              <h3>Status History</h3>
+              {statusHistory.length === 0 ? (
+                <div className="empty">No status changes</div>
+              ) : (
+                <table style={{ width: "100%", fontSize: "12px" }}>
+                  <thead>
+                    <tr>
+                      <th style={{ textAlign: "left" }}>From</th>
+                      <th style={{ textAlign: "left" }}>To</th>
+                      <th style={{ textAlign: "left" }}>Reason</th>
+                      <th style={{ textAlign: "left" }}>At</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {statusHistory.map((h) => (
+                      <tr key={h.id}>
+                        <td>{h.from_status || "—"}</td>
+                        <td>
+                          <span className={`badge ${statusBadge[h.to_status]}`}>{h.to_status}</span>
+                        </td>
+                        <td>{h.reason || "—"}</td>
+                        <td>{fmtTime(h.changed_at)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+            </div>
+
+            <div className="card">
+              <h3>Danger Zone</h3>
+              <button
+                className="btn-secondary w-full"
+                style={{ background: "#f8717120", color: "#f87171" }}
+                onClick={() => handleDeleteDevice(selectedDevice!.id)}
+              >
+                Delete Device
+              </button>
+            </div>
+          </div>
+        )} : (
+          <div className="card" style={{ textAlign: "center", padding: 40 }}>
+            <div className="empty">Select a device to manage</div>
+          </div>
+        )}
+      </div>
+
+      <Modal isOpen={showCreateModal} onClose={() => setShowCreateModal(false)} title="Register New Device">
+        <CreateDeviceForm onSubmit={handleCreateDevice} onCancel={() => setShowCreateModal(false)} />
+      </Modal>
+
+      <Modal isOpen={showCredentialsModal} onClose={() => { setShowCredentialsModal(false); setNewCredentials(null); }} title="New Credentials (shown once)">
+        <div className="p-4">
+          <div className="mb-3">
+            <label className="block text-xs text-muted mb-1">API Key</label>
+            <input className="w-full p-2 bg-bg border border-border rounded text-xs" value={newCredentials?.api_key} readOnly />
+          </div>
+          <div className="mb-3">
+            <label className="block text-xs text-muted mb-1">Secret (save now!)</label>
+            <input className="w-full p-2 bg-bg border border-border rounded text-xs" value={newCredentials?.secret} readOnly />
+          </div>
+          <button className="btn-primary w-full" onClick={() => { setShowCredentialsModal(false); setNewCredentials(null); }}>
+            I've saved these
+          </button>
+        </div>
+      </Modal>
+    </div>
+  );
+}
+
+function CreateDeviceForm({ onSubmit, onCancel }: { onSubmit: (data: any) => void; onCancel: () => void }) {
+  const [form, setForm] = useState({
+    device_code: "",
+    name: "",
+    location_name: "",
+    latitude: "",
+    longitude: "",
+    altitude: "",
+    firmware_version: "1.0.0",
+  });
+
+  return (
+    <form onSubmit={(e) => { e.preventDefault(); onSubmit(form); }} className="p-4 space-y-3">
+      <div>
+        <label className="block text-xs text-muted mb-1">Device Code</label>
+        <input className="w-full p-2 bg-bg border border-border rounded" value={form.device_code} onChange={(e) => setForm({...form, device_code: e.target.value})} required />
+      </div>
+      <div>
+        <label className="block text-xs text-muted mb-1">Name</label>
+        <input className="w-full p-2 bg-bg border border-border rounded" value={form.name} onChange={(e) => setForm({...form, name: e.target.value})} required />
+      </div>
+      <div>
+        <label className="block text-xs text-muted mb-1">Location Name</label>
+        <input className="w-full p-2 bg-bg border border-border rounded" value={form.location_name} onChange={(e) => setForm({...form, location_name: e.target.value})} required />
+      </div>
+      <div className="grid grid-cols-2 gap-2">
+        <div>
+          <label className="block text-xs text-muted mb-1">Latitude</label>
+          <input className="w-full p-2 bg-bg border border-border rounded" type="number" step="any" value={form.latitude} onChange={(e) => setForm({...form, latitude: e.target.value})} required />
+        </div>
+        <div>
+          <label className="block text-xs text-muted mb-1">Longitude</label>
+          <input className="w-full p-2 bg-bg border border-border rounded" type="number" step="any" value={form.longitude} onChange={(e) => setForm({...form, longitude: e.target.value})} required />
+        </div>
+      </div>
+      <div>
+        <label className="block text-xs text-muted mb-1">Altitude (m)</label>
+        <input className="w-full p-2 bg-bg border border-border rounded" type="number" step="any" value={form.altitude} onChange={(e) => setForm({...form, altitude: e.target.value})} />
+      </div>
+      <div>
+        <label className="block text-xs text-muted mb-1">Firmware Version</label>
+        <input className="w-full p-2 bg-bg border border-border rounded" value={form.firmware_version} onChange={(e) => setForm({...form, firmware_version: e.target.value})} />
+      </div>
+      <div className="flex gap-2">
+        <button type="submit" className="btn-primary flex-1">Create Device</button>
+        <button type="button" className="btn-secondary flex-1" onClick={onCancel}>Cancel</button>
+      </div>
+    </form>
+  );
+}
